@@ -1,0 +1,180 @@
+@import "tailwindcss";
+
+@source "../../../../packages/ui/src";
+
+@plugin "daisyui" {
+  themes:
+    gpql --default,
+    gpql-dark;
+}
+
+@plugin "daisyui/theme" {
+  name: "gpql";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(100% 0 0);
+  --color-base-200: oklch(96.5% 0.002 286);
+  --color-base-300: oklch(92.5% 0.003 286);
+  --color-base-content: oklch(24% 0.006 286);
+  --color-primary: oklch(58% 0.208 258);
+  --color-primary-content: oklch(99% 0 0);
+  --color-secondary: oklch(94% 0.024 258);
+  --color-secondary-content: oklch(52% 0.19 258);
+  --color-accent: oklch(76% 0.13 78);
+  --color-accent-content: oklch(30% 0.06 78);
+  --color-neutral: oklch(28% 0.005 286);
+  --color-neutral-content: oklch(97% 0.002 286);
+  --color-info: oklch(58% 0.208 258);
+  --color-info-content: oklch(99% 0 0);
+  --color-success: oklch(64% 0.16 152);
+  --color-success-content: oklch(99% 0 0);
+  --color-warning: oklch(72% 0.16 68);
+  --color-warning-content: oklch(28% 0.07 68);
+  --color-error: oklch(58% 0.207 25);
+  --color-error-content: oklch(99% 0 0);
+  --radius-selector: 2rem;
+  --radius-field: 0.625rem;
+  --radius-box: 0.875rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin "daisyui/theme" {
+  name: "gpql-dark";
+  default: false;
+  prefersdark: false;
+  color-scheme: "dark";
+  --color-base-100: #17181a;
+  --color-base-200: #101113;
+  --color-base-300: #24262a;
+  --color-base-content: #f1f2f4;
+  --color-primary: #f0b183;
+  --color-primary-content: #221607;
+  --color-secondary: #2a2119;
+  --color-secondary-content: #f0b183;
+  --color-accent: #8fe9cf;
+  --color-accent-content: #08241d;
+  --color-neutral: #e6e7e9;
+  --color-neutral-content: #17181a;
+  --color-info: #8fb8f0;
+  --color-info-content: #0a1626;
+  --color-success: #8fe9cf;
+  --color-success-content: #08241d;
+  --color-warning: #f0b183;
+  --color-warning-content: #221607;
+  --color-error: #f27c7c;
+  --color-error-content: #2a0f0f;
+  --radius-selector: 2rem;
+  --radius-field: 0.625rem;
+  --radius-box: 0.875rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@theme {
+  --font-sans:
+    "Inter var", "Inter", -apple-system, "Segoe UI Variable Text", "Segoe UI",
+    system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-base-200);
+}
+
+[data-acrylic="on"],
+[data-acrylic="on"] body {
+  background: transparent;
+}
+
+[data-acrylic="on"] {
+  --color-base-200: color-mix(in oklab, #101113 62%, transparent);
+  --color-base-100: color-mix(in oklab, #17181a 82%, transparent);
+  --color-base-300: color-mix(in oklab, #24262a 78%, transparent);
+}
+
+.texture {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: var(--texture-amount, 0);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+}
+
+.hairline {
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-base-content) 7%, transparent);
+}
+
+.lift {
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--color-base-content) 6%, transparent),
+    0 0.0625rem 0.125rem color-mix(in oklch, var(--color-base-content) 5%, transparent),
+    0 0.75rem 2rem color-mix(in oklch, var(--color-base-content) 6%, transparent);
+}
+
+.svelte-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke-default: color-mix(in oklch, var(--color-base-content) 20%, transparent);
+  --xy-handle-border-color-default: transparent;
+  --xy-controls-button-background-color-default: var(--color-base-100);
+  --xy-controls-button-color-default: var(--color-base-content);
+  --xy-controls-button-border-color-default: transparent;
+  font-family: inherit;
+}
+
+.svelte-flow__attribution {
+  background: transparent;
+  font-size: 0.625rem;
+  opacity: 0.35;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--color-base-content) 16%, transparent)
+    transparent;
+}
+
+::-webkit-scrollbar {
+  width: 0.375rem;
+  height: 0.375rem;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 1rem;
+  background: color-mix(in oklch, var(--color-base-content) 16%, transparent);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklch, var(--color-base-content) 34%, transparent);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
