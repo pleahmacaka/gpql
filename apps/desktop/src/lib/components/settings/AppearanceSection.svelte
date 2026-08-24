@@ -2,33 +2,49 @@
   import * as m from "$lib/paraglide/messages"
   import { getLocale, locales, setLocale } from "$lib/paraglide/runtime"
 
-  import { OptionRow as OptionRow } from "@gpql/ui"
-  import { workspace } from "$lib/session/workspace.svelte"
+  import { Dropdown, OptionRow as OptionRow } from "@gpql/ui"
+  import { type Scheme, schemes, workspace } from "$lib/session/workspace.svelte"
+
+  const label = (scheme: Scheme) =>
+    scheme === "system"
+      ? m.theme_system()
+      : scheme === "light"
+        ? m.theme_light()
+        : m.theme_dark()
+
+  let languages = $derived(
+    locales.map(locale => ({
+      value: locale,
+      label: locale === "ko" ? "한국어" : "English",
+    })),
+  )
+
+  let themes = $derived(
+    schemes.map(scheme => ({ value: scheme, label: label(scheme) })),
+  )
 </script>
 
-<label class="mb-2 flex items-center gap-3 rounded-field bg-base-200 px-3 py-2">
+<div class="mb-2 flex items-center gap-3 rounded-field bg-base-200 px-3 py-2">
   <span class="flex-1 text-sm">{m.language()}</span>
 
-  <select
+  <Dropdown
+    options={languages}
     value={getLocale()}
-    onchange={event => setLocale(event.currentTarget.value as "en" | "ko")}
-    class="cursor-pointer bg-transparent text-sm outline-none"
-  >
-    {#each locales as locale (locale)}
-      <option value={locale}>{locale === "ko" ? "한국어" : "English"}</option>
-    {/each}
-  </select>
-</label>
+    onpick={next => setLocale(next as "en" | "ko")}
+  />
+</div>
+
+<div class="mb-2 flex items-center gap-3 rounded-field bg-base-200 px-3 py-2">
+  <span class="flex-1 text-sm">{m.option_theme()}</span>
+
+  <Dropdown
+    options={themes}
+    value={workspace.scheme}
+    onpick={next => workspace.setScheme(next as Scheme)}
+  />
+</div>
 
 <div class="space-y-2">
-  <OptionRow
-    icon="lucide:moon"
-    title={m.option_dark()}
-    detail={m.option_dark_hint()}
-    on={workspace.dark}
-    onclick={() => workspace.toggle("dark")}
-  />
-
   <OptionRow
     icon="lucide:rows-3"
     title={m.option_compact()}

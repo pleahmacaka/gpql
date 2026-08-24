@@ -5,6 +5,8 @@
   import type { Mode, SessionConfig } from "$lib/types"
   import { workspace } from "$lib/session/workspace.svelte"
 
+  import ErdStart from "$lib/components/erd/ErdStart.svelte"
+
   import NewSession from "./NewSession.svelte"
   import QuickConnect from "./QuickConnect.svelte"
   import RecentList from "./RecentList.svelte"
@@ -15,6 +17,7 @@
     new: m.panel_new(),
     quick: m.panel_quick(),
     recent: m.panel_recent(),
+    erd: m.panel_erd(),
   }
 
   function handoff(config: SessionConfig) {
@@ -28,11 +31,12 @@
 
   <div class="pb-2">
     <Segmented
-      bind:value={() => workspace.mode, next => (workspace.mode = next as Mode)}
+      onpick={next => (workspace.mode = next as Mode)}
+      value={workspace.mode === "new" ? "recent" : workspace.mode}
       options={[
-        { value: "new", label: m.mode_new() },
-        { value: "quick", label: m.mode_quick() },
         { value: "recent", label: m.mode_recent() },
+        { value: "quick", label: m.mode_quick() },
+        { value: "erd", label: m.mode_erd() },
       ]}
     />
   </div>
@@ -43,7 +47,9 @@
     {/key}
   {:else if workspace.mode === "quick"}
     <QuickConnect onhandoff={handoff} />
-  {:else}
+  {:else if workspace.mode === "recent"}
     <RecentList />
+  {:else}
+    <ErdStart />
   {/if}
 </section>

@@ -1,6 +1,7 @@
 import { desc, eq } from "drizzle-orm"
 
 import { local } from "$lib/db/client"
+import { ErdDocument } from "$lib/erd/document.svelte"
 import { migrate } from "$lib/db/migrate"
 import { preference, recent, savedQuery } from "$lib/db/schema"
 import type {
@@ -17,16 +18,31 @@ import type {
   TableSchema,
 } from "$lib/types"
 import * as api from "./commands"
+import { friendly } from "./errors"
 import { blankConfig } from "./commands"
 
 const PAGE = 500
 
+export const DEFAULT_AGENT = "npx @zed-industries/claude-code-acp"
+
+export type ChatTurn = { role: "you" | "agent"; text: string }
+
+export const schemes = ["system", "light", "dark"] as const
+
+export type Scheme = (typeof schemes)[number]
+
+function readScheme(value: string | undefined): Scheme {
+  return schemes.includes(value as Scheme) ? (value as Scheme) : "system"
+}
+
 export class Workspace {
   session = $state<SessionHandle | null>(null)
+  erd = $state<ErdDocument | null>(null)
   tab = $state<Tab>("data")
-  mode = $state<Mode>("new")
+  mode = $state<Mode>("recent")
 
-  dark = $state(false)
+  scheme = $state<Scheme>("system")
+  systemDark = $state(false)
   compact = $state(false)
   readOnly = $state(true)
   acrylic = $state(false)
@@ -57,6 +73,10 @@ export class Workspace {
   agent = $state(false)
   shared = $state("")
   agentCommand = $state("")
+  chatOpen = $state(false)
+  chatBusy = $state(false)
+  chatError = $state("")
+  chat = $state<ChatTurn[]>([])
   languageServers = $state<Record<string, string>>({})
   providers = $state<Provider[]>([])
   signedIn = $state(false)
@@ -95,6 +115,10 @@ export class Workspace {
       .map(label => ({ label, detail: "schema", kind: 5 }))
   }
 
+  get dark() {
+    return this.scheme === "system" ? this.systemDark : this.scheme === "dark"
+  }
+
   get theme() {
     return this.dark ? "gpql-dark" : "gpql"
   }
@@ -113,7 +137,8 @@ export class Workspace {
     const stored = await local.select().from(preference)
     const settings = new Map(stored.map(row => [row.key, row.value]))
 
-    this.dark = settings.get("dark") === "on"
+    this.watchSystemScheme()
+    this.scheme = readScheme(settings.get("scheme"))
     this.compact = settings.get("compact") === "on"
     this.readOnly = settings.get("readOnly") !== "off"
     this.acrylic = settings.get("acrylic") === "on"
@@ -137,10 +162,6 @@ export class Workspace {
     await this.reloadPresets()
     await this.reloadProviders()
     await this.refreshAccount()
-
-    if (this.recents.length > 0) {
-      this.mode = "recent"
-    }
   }
 
   async remember(key: string, value: string) {
@@ -150,7 +171,19 @@ export class Workspace {
       .onConflictDoUpdate({ target: preference.key, set: { value } })
   }
 
-  async toggle(key: "dark" | "compact" | "readOnly" | "acrylic" | "autoscan") {
+  async setScheme(scheme: Scheme) {
+    this.scheme = scheme
+    await this.remember("scheme", scheme)
+    await this.paint()
+  }
+
+  async toggle(
+    key: "dark" | "compact" | "readOnly" | "acrylic" | "autoscan",
+  ): Promise<void> {
+    if (key === "dark") {
+      return this.setScheme(this.dark ? "light" : "dark")
+    }
+
     this[key] = !this[key]
     await this.remember(key, this[key] ? "on" : "off")
 
@@ -164,8 +197,25 @@ export class Workspace {
     await this.remember("settled", "yes")
   }
 
+  watchSystemScheme() {
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return
+    }
+
+    const query = window.matchMedia("(prefers-color-scheme: dark)")
+
+    this.systemDark = query.matches
+    query.addEventListener("change", event => {
+      this.systemDark = event.matches
+
+      if (this.scheme === "system") {
+        void this.paint()
+      }
+    })
+  }
+
   async paint() {
-    await api.run(api.setAcrylic(this.acrylic))
+    await api.run(api.setAcrylic(this.acrylic, this.dark))
   }
 
   async setTexture(amount: number) {
@@ -221,6 +271,40 @@ export class Workspace {
     this.presets = await api.run(api.credentials())
   }
 
+  async ensureAgent() {
+    if (this.agent) {
+      return
+    }
+
+    const line = this.agentCommand.trim() || DEFAULT_AGENT
+
+    await this.startAgent(line)
+  }
+
+  async say(prompt: string) {
+    const text = prompt.trim()
+
+    if (text === "" || this.chatBusy) {
+      return
+    }
+
+    this.chat = [...this.chat, { role: "you", text }]
+    this.chatBusy = true
+    this.chatError = ""
+
+    try {
+      await this.ensureAgent()
+
+      const answer = await api.run(api.agentChat(text))
+
+      this.chat = [...this.chat, { role: "agent", text: answer }]
+    } catch (failure) {
+      this.chatError = friendly(String(failure))
+    } finally {
+      this.chatBusy = false
+    }
+  }
+
   async startAgent(line: string) {
     const [program, ...args] = line.trim().split(/\s+/)
 
@@ -254,7 +338,7 @@ export class Workspace {
       this.sql = await api.run(api.askSql(providerId, prompt, this.session.id))
       this.selection = { start: 0, end: 0 }
     } catch (failure) {
-      this.queryError = String(failure)
+      this.queryError = friendly(String(failure))
     } finally {
       this.busy = false
     }
@@ -303,19 +387,25 @@ export class Workspace {
       await this.reloadRecents()
       await this.loadTables()
     } catch (failure) {
-      this.error = String(failure)
+      this.error = friendly(String(failure))
       throw failure
     } finally {
       this.busy = false
     }
   }
 
-  async resume(url: string) {
+  async resume(url: string, kind = "") {
+    if (kind === "erd") {
+      await this.startErd(url, true)
+
+      return
+    }
+
     const logins = await api.run(api.savedLogins())
     const match = logins.find(login => login.url === url)
 
     if (!match) {
-      this.error = "that login is not on this machine any more"
+      this.error = friendly("gpql.login_gone")
 
       return
     }
@@ -325,6 +415,35 @@ export class Workspace {
       ...match,
       readOnly: this.readOnly,
     })
+  }
+
+  async startErd(path: string, existing: boolean) {
+    this.erd = existing
+      ? await ErdDocument.open(path)
+      : await ErdDocument.create(path)
+
+    const stamp = Math.floor(Date.now() / 1000)
+
+    await local
+      .insert(recent)
+      .values({
+        url: path,
+        kind: "erd",
+        label: this.erd.name,
+        detail: path,
+        openedAt: stamp,
+      })
+      .onConflictDoUpdate({
+        target: recent.url,
+        set: { openedAt: stamp, label: this.erd.name, detail: path },
+      })
+
+    await this.reloadRecents()
+  }
+
+  closeErd() {
+    this.erd = null
+    this.mode = "recent"
   }
 
   async close() {
@@ -340,7 +459,7 @@ export class Workspace {
     this.selected = null
     this.queryResult = null
     this.queryRan = false
-    this.mode = this.recents.length > 0 ? "recent" : "new"
+    this.mode = "recent"
   }
 
   async loadTables() {
@@ -394,7 +513,7 @@ export class Workspace {
       )
       this.queryRan = true
     } catch (failure) {
-      this.queryError = String(failure)
+      this.queryError = friendly(String(failure))
       this.queryResult = null
     } finally {
       this.busy = false

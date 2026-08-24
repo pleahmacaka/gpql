@@ -2,7 +2,7 @@ export type Engine = string
 
 export type Tab = "data" | "query" | "schema"
 
-export type Mode = "new" | "quick" | "recent"
+export type Mode = "new" | "quick" | "recent" | "erd"
 
 export interface BackendField {
   key: string

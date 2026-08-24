@@ -109,7 +109,7 @@
         type="button"
         onclick={() => (step < steps.length - 1 ? (step += 1) : ondone())}
         class="rounded-field bg-primary px-4 py-2 text-sm text-primary-content
-          hover:brightness-105"
+          hover:bg-primary/90"
       >
         {step < steps.length - 1 ? m.first_run_next() : m.first_run_start()}
       </button>

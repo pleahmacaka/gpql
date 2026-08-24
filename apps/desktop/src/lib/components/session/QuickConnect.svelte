@@ -43,12 +43,15 @@
 
 <div class="space-y-1">
   {#if workspace.scanning}
-    <p class="flex items-center gap-2 px-3 py-6 text-sm text-base-content/45">
+    <p
+      class="flex items-center justify-center gap-2 px-3 py-6 text-sm
+        text-base-content/45"
+    >
       <span class="loading loading-spinner loading-xs"></span>
       {m.scan_running()}
     </p>
   {:else if workspace.found.length === 0}
-    <p class="px-3 py-6 text-sm text-base-content/45">
+    <p class="px-3 py-6 text-center text-sm text-base-content/45">
       {m.scan_empty()}
     </p>
   {:else}

@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { ContextMenu, ListRow } from "@gpql/ui"
+  import { ContextMenu, Icon, ListRow } from "@gpql/ui"
   import { workspace } from "$lib/session/workspace.svelte"
 
   let menu = $state<{
@@ -39,8 +39,20 @@
 </script>
 
 <div class="space-y-1">
+  <button
+    type="button"
+    onclick={() => (workspace.mode = "new")}
+    class="flex w-full items-center justify-center gap-1.5 rounded-field
+      border border-dashed border-base-content/20 px-3 py-2 text-sm
+      text-base-content/60 transition-colors hover:border-primary/50
+      hover:text-primary"
+  >
+    <Icon icon="lucide:plus" class="size-4" />
+    {m.panel_new()}
+  </button>
+
   {#if workspace.recents.length === 0}
-    <p class="px-3 py-6 text-sm text-base-content/45">
+    <p class="px-3 py-6 text-center text-sm text-base-content/45">
       {m.recent_empty()}
     </p>
   {:else}
@@ -48,10 +60,14 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div oncontextmenu={event => openMenu(event, entry.url, entry.label)}>
         <ListRow
-        icon={entry.kind === "sqlite" ? "lucide:file" : "lucide:database"}
+        icon={entry.kind === "erd"
+          ? "lucide:git-fork"
+          : entry.kind === "sqlite"
+            ? "lucide:file"
+            : "lucide:database"}
         title={entry.label}
         detail={entry.detail}
-        onclick={() => workspace.resume(entry.url)}
+        onclick={() => workspace.resume(entry.url, entry.kind)}
           ondismiss={() => workspace.forgetRecent(entry.url)}
         />
       </div>

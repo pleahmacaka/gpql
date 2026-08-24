@@ -35,7 +35,7 @@
   <h2 class="px-1 pb-1 text-xs text-base-content/45">{m.opened_before()}</h2>
 
   {#if workspace.recents.length === 0}
-    <p class="px-1 py-3 text-sm text-base-content/45">
+    <p class="px-1 py-3 text-center text-sm text-base-content/45">
       {m.recent_empty()}
     </p>
   {:else}

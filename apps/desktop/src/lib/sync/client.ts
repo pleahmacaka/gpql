@@ -6,7 +6,9 @@ import { preference, recent, savedQuery } from "$lib/db/schema"
 import { accountToken, run } from "$lib/session/commands"
 import type { SyncPayload } from "$lib/types"
 
-export const site = import.meta.env.VITE_GPQL_SITE ?? "https://gpql.app"
+const fallback = import.meta.env.DEV ? "http://localhost:5173" : "https://gpql.app"
+
+export const site = import.meta.env.VITE_GPQL_SITE ?? fallback
 
 export async function sync(): Promise<string> {
   const token = await run(accountToken())

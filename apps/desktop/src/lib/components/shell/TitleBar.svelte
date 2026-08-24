@@ -41,6 +41,8 @@
   onchip={onToggleMenu}
   ontab={pick}
   onsettings={onOpenSettings}
+  agentOn={workspace.chatOpen}
+  onagent={() => (workspace.chatOpen = !workspace.chatOpen)}
 >
   {#snippet controls()}
     <WindowControls />
