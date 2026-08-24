@@ -1,0 +1,45 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build && bunx esbuild src/erd-socket.ts --bundle --platform=node --format=esm --packages=external --outfile=build/erd-socket.js",
+    "preview": "vite preview",
+    "prepare": "svelte-kit sync || echo ''",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "db:push": "drizzle-kit push",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "start": "node server.js"
+  },
+  "devDependencies": {
+    "@iconify-json/lucide": "^1.2.125",
+    "@sveltejs/adapter-node": "^5.5.4",
+    "@sveltejs/kit": "^2.63.0",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^24",
+    "@types/ws": "^8.18.1",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.9",
+    "svelte": "^5.56.1",
+    "svelte-check": "^4.6.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  },
+  "dependencies": {
+    "@gpql/ui": "workspace:*",
+    "@iconify/svelte": "^5.2.2",
+    "@xyflow/svelte": "^1.6.3",
+    "better-auth": "^1.7.1",
+    "daisyui": "^5.7.21",
+    "layerchart": "^2.3.0",
+    "ws": "^8.21.3"
+  }
+}

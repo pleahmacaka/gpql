@@ -1,0 +1,21 @@
+{
+  "name": "gpql",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "app": "cd apps/desktop && bun run tauri dev",
+    "app:build": "cd apps/desktop && bun run tauri build",
+    "app:test": "cd apps/desktop && bun test",
+    "web": "cd apps/web && bun run dev",
+    "web:build": "cd apps/web && bun run build",
+    "db:push": "cd apps/web && bun run db:push",
+    "check": "bunx biome check --write . && cd apps/desktop && bun run check && cd ../web && bun run check"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.10"
+  }
+}
