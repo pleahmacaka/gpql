@@ -47,10 +47,12 @@
   let edges = $state.raw<Edge[]>([])
   let linked = $state.raw<Edge[]>([])
 
-  let levels = $derived(byLevel(tables))
+  let plain = $derived($state.snapshot(tables) as SchemaTable[])
+
+  let levels = $derived(byLevel(plain))
 
   $effect(() => {
-    const built = toFlow(tables)
+    const built = toFlow(plain)
 
     nodes = built.nodes
     linked = built.edges
@@ -74,13 +76,16 @@
 
   $effect(() => {
     const target = board.selected
-    const ready = nodes.length > 0
 
-    if (!target || !ready) {
+    if (!target) {
       return
     }
 
     untrack(() => {
+      if (nodes.length === 0) {
+        return
+      }
+
       board.table = target
       board.column = -1
       flow.fitView({ nodes: [{ id: target }], duration: 220, maxZoom: 1 })

@@ -34,7 +34,7 @@
         type="button"
         onclick={() => start("github")}
         class="flex w-full items-center justify-center gap-2 rounded-field
-          bg-neutral py-2.5 text-sm text-neutral-content hover:brightness-110"
+          bg-neutral py-2.5 text-sm text-neutral-content hover:bg-neutral/90"
       >
         <Icon icon="lucide:github" class="size-4" />
         Continue with GitHub

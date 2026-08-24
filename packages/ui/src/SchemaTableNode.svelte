@@ -15,7 +15,7 @@
 <div
   class="w-72 rounded-box p-3 transition-colors
     {active ? 'bg-primary/10' : 'bg-base-200/70 hover:bg-base-200'}
-    {focused ? 'ring-2 ring-primary/60' : 'hairline'}"
+    {focused ? 'ring-1 ring-primary' : 'hairline'}"
 >
   <Handle
     type="target"

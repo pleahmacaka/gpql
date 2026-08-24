@@ -103,9 +103,8 @@ body {
 
 .lift {
   box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--color-base-content) 6%, transparent),
-    0 0.0625rem 0.125rem color-mix(in oklch, var(--color-base-content) 5%, transparent),
-    0 0.75rem 2rem color-mix(in oklch, var(--color-base-content) 6%, transparent);
+    0 0 0 1px color-mix(in oklch, var(--color-base-content) 9%, transparent),
+    0 0.0625rem 0.125rem color-mix(in oklch, var(--color-base-content) 5%, transparent);
 }
 
 ::-webkit-scrollbar {

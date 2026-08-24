@@ -72,7 +72,7 @@
   {#each workspace.presets as preset (preset.name)}
     <div class="group flex items-center gap-2">
       <Icon
-        icon={preset.builtin ? "lucide:box" : "lucide:key-round"}
+        icon="lucide:key-round"
         class="size-3.5 shrink-0 text-base-content/35"
       />
 

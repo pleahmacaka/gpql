@@ -11,6 +11,8 @@
     onchip?: () => void
     ontab?: (tab: string) => void
     onsettings?: () => void
+    onagent?: () => void
+    agentOn?: boolean
     controls?: Snippet
   }
 
@@ -22,6 +24,8 @@
     onchip,
     ontab,
     onsettings,
+    onagent,
+    agentOn = false,
     controls,
   }: Props = $props()
 
@@ -73,6 +77,20 @@
       </div>
     {/if}
   </div>
+
+  <svelte:element
+    this={live ? "button" : "span"}
+    role={live ? "button" : undefined}
+    tabindex={live ? 0 : undefined}
+    aria-label="Agent"
+    aria-pressed={agentOn}
+    onclick={onagent}
+    class="grid h-11 w-12 place-items-center
+      {agentOn ? 'text-primary' : 'text-base-content/60'}
+      {live ? 'transition-colors hover:bg-base-300' : ''}"
+  >
+    <Icon icon="lucide:sparkles" class="size-4" />
+  </svelte:element>
 
   <svelte:element
     this={live ? "button" : "span"}

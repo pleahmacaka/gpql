@@ -102,10 +102,54 @@ body {
   background: transparent;
 }
 
-[data-acrylic="on"] {
+[data-theme="gpql"][data-acrylic="on"] {
+  --color-base-200: color-mix(in oklab, oklch(96.5% 0.002 286) 58%, transparent);
+  --color-base-100: color-mix(in oklab, oklch(100% 0 0) 78%, transparent);
+  --color-base-300: color-mix(in oklab, oklch(92.5% 0.003 286) 74%, transparent);
+}
+
+[data-theme="gpql-dark"][data-acrylic="on"] {
   --color-base-200: color-mix(in oklab, #101113 62%, transparent);
   --color-base-100: color-mix(in oklab, #17181a 82%, transparent);
   --color-base-300: color-mix(in oklab, #24262a 78%, transparent);
+}
+
+.gridfield {
+  position: relative;
+  isolation: isolate;
+}
+
+.gridfield::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in oklch, var(--color-base-content) 6%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklch, var(--color-base-content) 6%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 2.5rem 2.5rem;
+  mask-image: radial-gradient(ellipse at center, #000 25%, transparent 78%);
+}
+
+[data-theme="gpql"] {
+  --scrim: color-mix(in oklab, #0b0b0d 30%, transparent);
+}
+
+[data-theme="gpql-dark"] {
+  --scrim: color-mix(in oklab, #000 55%, transparent);
+}
+
+.scrim {
+  background: var(--scrim, color-mix(in oklab, #0b0b0d 30%, transparent));
 }
 
 .texture {
@@ -124,9 +168,8 @@ body {
 
 .lift {
   box-shadow:
-    0 0 0 1px color-mix(in oklch, var(--color-base-content) 6%, transparent),
-    0 0.0625rem 0.125rem color-mix(in oklch, var(--color-base-content) 5%, transparent),
-    0 0.75rem 2rem color-mix(in oklch, var(--color-base-content) 6%, transparent);
+    0 0 0 1px color-mix(in oklch, var(--color-base-content) 9%, transparent),
+    0 0.0625rem 0.125rem color-mix(in oklch, var(--color-base-content) 5%, transparent);
 }
 
 .svelte-flow {

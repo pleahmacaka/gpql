@@ -30,7 +30,7 @@
 </script>
 
 <div
-  class="fixed inset-0 z-50 bg-neutral/30"
+  class="fixed inset-0 z-50 scrim"
   role="presentation"
   onclick={onclose}
 ></div>

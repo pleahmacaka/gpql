@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Dropdown from "./Dropdown.svelte"
   import Field from "./Field.svelte"
   import { Icon } from "./icons"
   import type {
@@ -12,13 +13,26 @@
     draft: SessionDraft
     backends: BackendInfo[]
     presets?: CredentialPreset[]
+    databases?: string[]
     probe?: Probe
     readOnly?: boolean
     busy?: boolean
     onconnect?: () => void
     ontoggleReadOnly?: () => void
+    onbrowse?: () => void
     labels?: Partial<Record<
-      "database" | "credentials" | "typed" | "readOnly" | "readOnlyHint" | "connect" | "keys",
+      | "database"
+      | "credentials"
+      | "typed"
+      | "readOnly"
+      | "readOnlyHint"
+      | "connect"
+      | "keys"
+      | "browse"
+      | "tlsAuto"
+      | "tlsVerify"
+      | "tlsRequire"
+      | "tlsOff",
       string
     >>
   }
@@ -27,11 +41,13 @@
     draft = $bindable(),
     backends,
     presets = [],
+    databases = [],
     probe = { tone: "idle", text: "" },
     readOnly = true,
     busy = false,
     onconnect,
     ontoggleReadOnly,
+    onbrowse,
     labels = {},
   }: Props = $props()
 
@@ -43,17 +59,23 @@
     readOnlyHint: labels.readOnlyHint ?? "the server refuses every write",
     connect: labels.connect ?? "Connect",
     keys: labels.keys ?? "tab moves, return connects",
+    browse: labels.browse ?? "Browse",
+    tlsAuto: labels.tlsAuto ?? "Automatic",
+    tlsVerify: labels.tlsVerify ?? "Verify certificate",
+    tlsRequire: labels.tlsRequire ?? "Encrypt only",
+    tlsOff: labels.tlsOff ?? "Off",
   })
-
-  let preset = $state("")
 
   let backend = $derived(
     backends.find(entry => entry.id === draft.kind) ?? backends[0],
   )
 
-  let wantsCredentials = $derived(
-    presets.length > 0 &&
-      (backend?.fields.some(field => field.key === "user") ?? false),
+  let users = $derived([
+    ...new Set(presets.map(entry => entry.user).filter(name => name !== "")),
+  ])
+
+  let matching = $derived(
+    presets.filter(entry => entry.user === draft.user && entry.password !== ""),
   )
 
   const dot: Record<Probe["tone"], string> = {
@@ -79,17 +101,6 @@
     }
   }
 
-  function applyPreset() {
-    const picked = presets.find(entry => entry.name === preset)
-
-    if (!picked) {
-      return
-    }
-
-    draft.user = picked.user
-    draft.password = picked.password
-  }
-
   function keys(event: KeyboardEvent) {
     if (event.key === "Enter") {
       event.preventDefault()
@@ -99,37 +110,16 @@
 </script>
 
 <div class="space-y-2">
-  <label class="block rounded-field bg-base-200 px-3 pt-1.5 pb-1.5">
+  <div class="block rounded-field bg-base-200 px-3 pt-1.5 pb-1.5">
     <span class="block text-xs text-base-content/45">{words.database}</span>
 
-    <select
+    <Dropdown
+      wide
       value={draft.kind}
-      onchange={event => pickBackend(event.currentTarget.value)}
-      class="w-full cursor-pointer bg-transparent text-sm outline-none"
-    >
-      {#each backends as entry (entry.id)}
-        <option value={entry.id}>{entry.label}</option>
-      {/each}
-    </select>
-  </label>
-
-  {#if wantsCredentials}
-    <label class="block rounded-field bg-base-200 px-3 pt-1.5 pb-1.5">
-      <span class="block text-xs text-base-content/45">{words.credentials}</span>
-
-      <select
-        bind:value={preset}
-        onchange={applyPreset}
-        class="w-full cursor-pointer bg-transparent text-sm outline-none"
-      >
-        <option value="">{words.typed}</option>
-
-        {#each presets as entry (entry.name)}
-          <option value={entry.name}>{entry.name}</option>
-        {/each}
-      </select>
-    </label>
-  {/if}
+      options={backends.map(entry => ({ value: entry.id, label: entry.label }))}
+      onpick={pickBackend}
+    />
+  </div>
 
   {#each backend?.fields ?? [] as field (field.key)}
     {#if field.key === "port"}
@@ -148,6 +138,110 @@
         {#if backend?.fields.some(entry => entry.key === "port")}
           <div class="w-24">
             <Field label="Port" bind:value={draft.port} onkeydown={keys} />
+          </div>
+        {/if}
+      </div>
+    {:else if field.key === "path" && onbrowse}
+      <div class="flex gap-2">
+        <div class="flex-1">
+          <Field
+            label={field.label}
+            placeholder={field.placeholder}
+            value={String(draft.path ?? "")}
+            oninput={value => (draft.path = value)}
+            onkeydown={keys}
+          />
+        </div>
+
+        <button
+          type="button"
+          onclick={() => onbrowse?.()}
+          class="flex items-center gap-1.5 rounded-field bg-base-200 px-3 text-sm
+            transition-colors hover:bg-base-300"
+        >
+          <Icon icon="lucide:folder-open" class="size-4 text-base-content/45" />
+          {words.browse}
+        </button>
+      </div>
+    {:else if field.key === "database"}
+      <div class="flex gap-2">
+        <div class="flex-1">
+          <Field
+            label={field.label}
+            placeholder={field.placeholder}
+            suggestions={databases}
+            value={String(draft.database ?? "")}
+            oninput={value => (draft.database = value)}
+            onkeydown={keys}
+          />
+        </div>
+
+        {#if databases.length > 0}
+          <div class="flex items-center rounded-field bg-base-200 px-3 text-sm">
+            <Dropdown
+              value={String(draft.database ?? "")}
+              options={databases.map(name => ({ value: name, label: name }))}
+              onpick={name => (draft.database = name)}
+            />
+          </div>
+        {/if}
+      </div>
+    {:else if field.key === "tls"}
+      <div class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-2">
+        <span class="flex-1 text-sm">{field.label}</span>
+
+        <Dropdown
+          value={String(draft.tls ?? "")}
+          options={[
+            { value: "", label: words.tlsAuto },
+            { value: "verify-full", label: words.tlsVerify },
+            { value: "require", label: words.tlsRequire },
+            { value: "disable", label: words.tlsOff },
+          ]}
+          onpick={next => (draft.tls = next)}
+        />
+      </div>
+    {:else if field.key === "user"}
+      <Field
+        label={field.label}
+        placeholder={field.placeholder}
+        suggestions={users}
+        value={String(draft.user ?? "")}
+        oninput={value => (draft.user = value)}
+        onkeydown={keys}
+      />
+    {:else if field.key === "password"}
+      <div class="flex gap-2">
+        <div class="flex-1">
+          <Field
+            label={field.label}
+            placeholder={field.placeholder}
+            type="password"
+            value={String(draft.password ?? "")}
+            oninput={value => (draft.password = value)}
+            onkeydown={keys}
+          />
+        </div>
+
+        {#if matching.length > 0}
+          <div
+            class="flex items-center rounded-field bg-base-200 px-3 text-sm"
+          >
+            <Dropdown
+              value=""
+              options={[
+                { value: "", label: words.typed },
+                ...matching.map(entry => ({
+                  value: entry.name,
+                  label: entry.name,
+                })),
+              ]}
+              onpick={name => {
+                const picked = presets.find(entry => entry.name === name)
+
+                draft.password = picked?.password ?? ""
+              }}
+            />
           </div>
         {/if}
       </div>

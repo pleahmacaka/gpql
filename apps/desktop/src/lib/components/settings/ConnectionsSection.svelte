@@ -15,7 +15,3 @@
     onclick={() => workspace.toggle("autoscan")}
   />
 </div>
-
-<p class="px-1 pt-2 text-xs text-base-content/45">
-  {m.loopback_note()}
-</p>

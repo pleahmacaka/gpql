@@ -60,7 +60,7 @@
         <a
           href="/download"
           class="rounded-field bg-primary px-4 py-2.5 text-sm text-primary-content
-            hover:brightness-105"
+            hover:bg-primary/90"
         >
           Download for Windows
         </a>
@@ -246,7 +246,7 @@
       <a
         href="/account"
         class="mt-5 block rounded-field bg-primary py-2.5 text-center text-sm
-          text-primary-content hover:brightness-105"
+          text-primary-content hover:bg-primary/90"
       >
         Sign in with GitHub or Google
       </a>

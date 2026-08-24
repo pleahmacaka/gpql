@@ -188,7 +188,7 @@
 </script>
 
 <div
-  class="fixed inset-0 z-60 bg-neutral/30"
+  class="fixed inset-0 z-60 scrim"
   role="presentation"
   onclick={onclose}
 ></div>

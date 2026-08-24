@@ -26,11 +26,7 @@
   }
 </script>
 
-<p class="text-xs text-base-content/45">
-  {m.editor_note()}
-</p>
-
-<div class="mt-2 space-y-2">
+<div class="space-y-2">
   {#each dialects as dialect (dialect.id)}
     <div class="rounded-field bg-base-200 p-2">
       <div class="flex items-center gap-2 pb-1">
