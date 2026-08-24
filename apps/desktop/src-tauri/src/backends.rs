@@ -60,6 +60,7 @@ const SERVER: &[Field] = &[
     field("user", "User", ""),
     secret("password", "Password"),
     field("database", "Database", ""),
+    field("tls", "TLS", ""),
 ];
 
 const FILE: &[Field] = &[field("path", "File", "C:\\path\\to\\app.db")];
@@ -72,8 +73,10 @@ const URL_TOKEN: &[Field] = &[
 
 const SUPABASE: &[Field] = &[
     field("host", "Project ref or host", "abcdefgh"),
+    field("user", "User", "postgres"),
     secret("password", "Database password"),
     field("database", "Database", "postgres"),
+    field("tls", "TLS", ""),
 ];
 
 const REDIS_URL: &[Field] = &[
@@ -92,6 +95,11 @@ const SNOWFLAKE: &[Field] = &[
     field("url", "Account URL", "https://org-account.snowflakecomputing.com"),
     secret("token", "Access token"),
     field("database", "Database", ""),
+];
+
+const SUPABASE_API: &[Field] = &[
+    secret("token", "Access token"),
+    field("database", "Project", "abcdefgh"),
 ];
 
 const D1: &[Field] = &[
@@ -152,6 +160,15 @@ pub const CATALOG: &[Backend] = &[
         port: "5432",
         fields: SUPABASE,
         transport: Transport::Postgres,
+    },
+    Backend {
+        id: "supabase_api",
+        label: "Supabase (token)",
+        dialect: "sql",
+        icon: "lucide:cloud",
+        port: "",
+        fields: SUPABASE_API,
+        transport: Transport::Http,
     },
     Backend {
         id: "greptimedb",

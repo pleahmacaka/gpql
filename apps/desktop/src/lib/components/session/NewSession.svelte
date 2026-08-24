@@ -5,7 +5,11 @@
   import { Effect, Fiber } from "effect"
   import { untrack } from "svelte"
 
+  import * as api from "$lib/session/commands"
   import { blankConfig, check } from "$lib/session/commands"
+  import { open } from "@tauri-apps/plugin-dialog"
+
+  import { friendly } from "$lib/session/errors"
   import { workspace } from "$lib/session/workspace.svelte"
   import type { Probe, SessionConfig } from "$lib/types"
 
@@ -23,15 +27,52 @@
 
   let running: Fiber.RuntimeFiber<void, never> | null = null
 
+  let catalogue = $state<string[]>([])
+
   let backend = $derived(
     workspace.catalog.find(entry => entry.id === config.kind),
   )
 
   let ready = $derived(
     (backend?.fields ?? [])
-      .filter(field => !field.secret && field.key !== "port")
+      .filter(
+        field => !field.secret && field.key !== "port" && field.key !== "tls",
+      )
       .every(field => String(config[field.key] ?? "").trim() !== ""),
   )
+
+  let wantsDatabase = $derived(
+    (backend?.fields ?? []).some(field => field.key === "database"),
+  )
+
+  let canList = $derived(
+    wantsDatabase &&
+      (String(config.token ?? "").trim() !== "" ||
+        (String(config.host ?? "").trim() !== "" &&
+          String(config.user ?? "").trim() !== "")),
+  )
+
+  $effect(() => {
+    void [
+      config.kind,
+      config.host,
+      config.port,
+      config.user,
+      config.password,
+      config.token,
+    ]
+
+    if (!canList) {
+      catalogue = []
+
+      return
+    }
+
+    const snapshot = { ...config }
+    const timer = setTimeout(() => void loadDatabases(snapshot), 600)
+
+    return () => clearTimeout(timer)
+  })
 
   $effect(() => {
     void [
@@ -80,18 +121,45 @@
       }).pipe(
         Effect.catchAll(failure =>
           Effect.sync(() => {
-            probe = { tone: "bad", text: failure.message }
+            probe = { tone: "bad", text: friendly(failure.message) }
           }),
         ),
       ),
     )
   }
 
+  async function loadDatabases(snapshot: SessionConfig) {
+    try {
+      catalogue = await api.run(api.databases(snapshot))
+    } catch (failure) {
+      catalogue = []
+      probe = { tone: "bad", text: friendly(String(failure)) }
+    }
+  }
+
+  async function pickFile() {
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      filters: [
+        {
+          name: "Database",
+          extensions: ["db", "sqlite", "sqlite3", "duckdb", "ddb"],
+        },
+      ],
+    })
+
+    if (typeof picked === "string") {
+      config.path = picked
+      verify()
+    }
+  }
+
   async function start() {
     try {
       await workspace.open(config)
     } catch (failure) {
-      probe = { tone: "bad", text: String(failure) }
+      probe = { tone: "bad", text: friendly(String(failure)) }
     }
   }
 </script>
@@ -105,6 +173,8 @@
   busy={workspace.busy}
   onconnect={start}
   ontoggleReadOnly={() => workspace.toggle("readOnly")}
+  onbrowse={pickFile}
+  databases={catalogue}
   labels={{
     database: m.field_database(),
     credentials: m.field_credentials(),
@@ -113,5 +183,10 @@
     readOnlyHint: m.read_only_hint(),
     connect: m.connect(),
     keys: m.keys_hint(),
+    browse: m.browse(),
+    tlsAuto: m.tls_auto(),
+    tlsVerify: m.tls_verify(),
+    tlsRequire: m.tls_require(),
+    tlsOff: m.tls_off(),
   }}
 />

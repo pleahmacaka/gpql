@@ -224,7 +224,9 @@ fn flavoured(config: &SessionConfig) -> SessionConfig {
             if out.database.is_empty() {
                 out.database = "postgres".into();
             }
-            out.tls = "require".into();
+            if out.tls.is_empty() {
+                out.tls = "require".into();
+            }
         }
         "greptimedb" => {
             if out.port.is_empty() {
@@ -241,8 +243,14 @@ fn flavoured(config: &SessionConfig) -> SessionConfig {
 }
 
 fn open_http(config: &SessionConfig) -> Result<Session, String> {
-    if config.url.is_empty() {
+    let hosted = config.kind == "supabase_api";
+
+    if config.url.is_empty() && !hosted {
         return Err("that connection needs a URL".into());
+    }
+
+    if hosted && config.database.is_empty() {
+        return Err("that connection needs a project".into());
     }
 
     let label = if config.database.is_empty() {
@@ -251,11 +259,17 @@ fn open_http(config: &SessionConfig) -> Result<Session, String> {
         config.database.clone()
     };
 
+    let detail = if hosted {
+        "supabase".to_string()
+    } else {
+        config.url.clone()
+    };
+
     return Ok(Session {
         engine: Engine::Http(crate::remote::Http::open(config)),
         read_only: config.read_only,
         label,
-        detail: config.url.clone(),
+        detail,
         kind: config.kind.clone(),
     });
 }
@@ -273,15 +287,65 @@ async fn open_graph(config: &SessionConfig) -> Result<Session, String> {
     });
 }
 
-fn tls_connector() -> MakeRustlsConnect {
-    let roots = rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+fn tls_connector(verify: bool) -> MakeRustlsConnect {
+    let settings = if verify {
+        let roots = rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+
+        rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    } else {
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(std::sync::Arc::new(SkipChainCheck))
+            .with_no_client_auth()
     };
-    let settings = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
 
     return MakeRustlsConnect::new(settings);
+}
+
+// libpq sslmode=require encrypts without checking the chain; hosts behind a
+// private CA only work under those rules. verify-full keeps the real check.
+#[derive(Debug)]
+struct SkipChainCheck;
+
+impl rustls::client::danger::ServerCertVerifier for SkipChainCheck {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        return Ok(rustls::client::danger::ServerCertVerified::assertion());
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        return Ok(rustls::client::danger::HandshakeSignatureValid::assertion());
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        return Ok(rustls::client::danger::HandshakeSignatureValid::assertion());
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        return rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes();
+    }
 }
 
 async fn open_postgres(config: &SessionConfig) -> Result<Session, String> {
@@ -290,8 +354,9 @@ async fn open_postgres(config: &SessionConfig) -> Result<Session, String> {
 
     let client = match wanted {
         "disable" => plain(&conn_string).await?,
-        "require" => secure(&conn_string).await?,
-        _ => match secure(&conn_string).await {
+        "verify-full" => secure(&conn_string, true).await?,
+        "require" => secure(&conn_string, false).await?,
+        _ => match secure(&conn_string, false).await {
             Ok(client) => client,
             Err(_) => plain(&conn_string).await?,
         },
@@ -316,8 +381,11 @@ async fn open_postgres(config: &SessionConfig) -> Result<Session, String> {
     });
 }
 
-async fn secure(conn_string: &str) -> Result<tokio_postgres::Client, String> {
-    let (client, connection) = tokio_postgres::connect(conn_string, tls_connector())
+async fn secure(
+    conn_string: &str,
+    verify: bool,
+) -> Result<tokio_postgres::Client, String> {
+    let (client, connection) = tokio_postgres::connect(conn_string, tls_connector(verify))
         .await
         .map_err(friendly_pg)?;
 
@@ -563,6 +631,9 @@ pub async fn schema(session: &Session) -> Result<Vec<TableSchema>, String> {
         }
         Engine::Sqlite(connection) => sqlite_schema(&connection.lock().unwrap(), &counts)?,
         Engine::MySql(client) => mysql_schema(client.columns().await?),
+        Engine::Http(remote) if remote.flavour == "supabase_api" => {
+            mysql_schema(remote.columns().await?)
+        }
         Engine::Duck(duck) => mysql_schema(duck.columns()?),
         _ => counts
             .keys()
@@ -860,11 +931,13 @@ fn friendly_pg(error: tokio_postgres::Error) -> String {
 
 fn plain_message(text: &str) -> String {
     let known = [
-        ("password missing", "this server wants a password"),
-        ("os error 10061", "nothing is listening there"),
-        ("Connection refused", "nothing is listening there"),
-        ("os error 10060", "the host never answered"),
-        ("failed to lookup address", "that host name goes nowhere"),
+        ("password missing", "gpql.needs_password"),
+        ("os error 10061", "gpql.no_listener"),
+        ("Connection refused", "gpql.no_listener"),
+        ("os error 10060", "gpql.no_answer"),
+        ("os error 11004", "gpql.ipv6_only"),
+        ("ENOIDENTIFIER", "gpql.needs_tenant"),
+        ("failed to lookup address", "gpql.bad_host"),
     ];
 
     for (needle, friendly) in known {

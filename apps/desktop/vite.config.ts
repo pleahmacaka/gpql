@@ -10,6 +10,7 @@ export default defineConfig({
     port: 1421,
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**"] },
+    fs: { allow: ["./drizzle"] },
   },
   plugins: [
     paraglideVitePlugin({
