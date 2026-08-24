@@ -5,6 +5,8 @@
   import ConnectPanel from "$lib/components/session/ConnectPanel.svelte"
   import SessionMenu from "$lib/components/session/SessionMenu.svelte"
   import SettingsDialog from "$lib/components/settings/SettingsDialog.svelte"
+  import AgentChat from "$lib/components/agent/AgentChat.svelte"
+  import ErdEditor from "$lib/components/erd/ErdEditor.svelte"
   import FirstRun from "$lib/components/shell/FirstRun.svelte"
   import QuickActions from "$lib/components/shell/QuickActions.svelte"
   import TitleBar from "$lib/components/shell/TitleBar.svelte"
@@ -40,6 +42,11 @@
       paletteOpen = false
     }
 
+    if (event.key === "j" && event.ctrlKey) {
+      event.preventDefault()
+      workspace.chatOpen = !workspace.chatOpen
+    }
+
     if (event.key === "k" && event.ctrlKey) {
       event.preventDefault()
       paletteOpen = !paletteOpen
@@ -54,9 +61,12 @@
     onOpenSettings={() => (settingsOpen = true)}
   />
 
-  <main class="min-h-0 flex-1">
+  <div class="flex min-h-0 flex-1">
+    <main class="min-h-0 flex-1 gridfield">
     {#if !workspace.settled}
       <FirstRun ondone={() => workspace.settle()} />
+    {:else if workspace.erd}
+      <ErdEditor doc={workspace.erd} />
     {:else if !workspace.session}
       <div class="h-full overflow-y-auto">
         <div class="mx-auto w-96 py-10">
@@ -70,7 +80,14 @@
     {:else}
       <SchemaTab />
     {/if}
-  </main>
+    </main>
+
+    {#if workspace.chatOpen}
+      <div class="min-h-0 py-2 pr-2">
+        <AgentChat />
+      </div>
+    {/if}
+  </div>
 
   {#if menuOpen}
     <SessionMenu onclose={() => (menuOpen = false)} />

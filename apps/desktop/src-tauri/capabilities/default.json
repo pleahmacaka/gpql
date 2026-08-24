@@ -22,6 +22,8 @@
           "url": "http://localhost:*"
         }
       ]
-    }
+    },
+    "dialog:allow-open",
+    "dialog:allow-save"
   ]
 }

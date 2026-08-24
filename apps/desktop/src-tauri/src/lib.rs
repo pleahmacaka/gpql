@@ -38,6 +38,69 @@ async fn check(config: SessionConfig) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn databases(config: SessionConfig) -> Result<Vec<String>, String> {
+    use crate::backends::Transport;
+
+    if config.kind == "supabase_api" {
+        return supabase_projects(&config.token).await;
+    }
+
+    let listing = match crate::backends::transport_of(&config.kind) {
+        Transport::Postgres => "select datname from pg_database where datistemplate = false order by 1",
+        Transport::MySql => "show databases",
+        _ => return Ok(Vec::new()),
+    };
+
+    let mut probing = config.clone();
+
+    if probing.database.is_empty() {
+        probing.database = "postgres".into();
+    }
+
+    probing.read_only = true;
+
+    let session = db::open(&probing).await?;
+    let result = db::query(&session, listing).await?;
+
+    return Ok(result
+        .rows
+        .into_iter()
+        .filter_map(|row| row.into_iter().next().flatten())
+        .collect());
+}
+
+async fn supabase_projects(token: &str) -> Result<Vec<String>, String> {
+    if token.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let body: Json = reqwest::Client::new()
+        .get("https://api.supabase.com/v1/projects")
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .json()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if let Some(message) = body.get("message").and_then(Json::as_str) {
+        return Err(message.to_string());
+    }
+
+    return Ok(body
+        .as_array()
+        .map(|projects| {
+            projects
+                .iter()
+                .filter_map(|project| project.get("id").and_then(Json::as_str))
+                .map(|id| id.to_string())
+                .collect()
+        })
+        .unwrap_or_default());
+}
+
+#[tauri::command]
 async fn connect(
     config: SessionConfig,
     sessions: State<'_, Sessions>,
@@ -144,16 +207,40 @@ async fn lsp_diagnostics(
 }
 
 #[tauri::command]
-fn set_acrylic(window: tauri::Window, on: bool) -> Result<(), String> {
+fn read_document(path: String) -> Result<String, String> {
+    return std::fs::read_to_string(&path).map_err(|e| e.to_string());
+}
+
+#[tauri::command]
+fn write_document(path: String, text: String) -> Result<(), String> {
+    return std::fs::write(&path, text).map_err(|e| e.to_string());
+}
+
+#[tauri::command]
+fn set_acrylic(window: tauri::Window, on: bool, dark: bool) -> Result<(), String> {
     use tauri::utils::config::WindowEffectsConfig;
     use tauri::window::Effect;
 
+    let tinted = if dark {
+        Effect::MicaDark
+    } else {
+        Effect::MicaLight
+    };
+
     let effects = on.then(|| WindowEffectsConfig {
-        effects: vec![Effect::Acrylic, Effect::Mica],
+        effects: vec![Effect::Acrylic, tinted],
         state: None,
         radius: None,
         color: None,
     });
+
+    let theme = if dark {
+        tauri::Theme::Dark
+    } else {
+        tauri::Theme::Light
+    };
+
+    window.set_theme(Some(theme)).map_err(|e| e.to_string())?;
 
     return window.set_effects(effects).map_err(|e| e.to_string());
 }
@@ -313,6 +400,14 @@ async fn agent_ready(assistant: State<'_, Assistant>) -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn agent_chat(
+    prompt: String,
+    assistant: State<'_, Assistant>,
+) -> Result<String, String> {
+    return assistant.ask(&prompt).await;
+}
+
+#[tauri::command]
 async fn agent_sql(
     prompt: String,
     session_id: String,
@@ -416,6 +511,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Sessions::default())
         .manage(Local::open().expect("gpql could not open its local database"))
         .manage(Highlighter::new().expect("gpql could not load its SQL grammar"))
@@ -423,6 +519,7 @@ pub fn run() {
         .manage(Assistant::default())
         .invoke_handler(tauri::generate_handler![
             check,
+            databases,
             connect,
             disconnect,
             tables,
@@ -436,6 +533,8 @@ pub fn run() {
             lsp_complete,
             lsp_diagnostics,
             set_acrylic,
+            read_document,
+            write_document,
             look_on_this_machine,
             scan_local,
             scan_tailnet,
@@ -454,6 +553,7 @@ pub fn run() {
             agent_start,
             agent_stop,
             agent_ready,
+            agent_chat,
             agent_sql,
             saved_logins,
             forget_login,

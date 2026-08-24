@@ -110,7 +110,8 @@ export const lspComplete = (
 export const lspDiagnostics = (dialect: string) =>
   call<Diagnostic[]>("lsp_diagnostics", { dialect })
 
-export const setAcrylic = (on: boolean) => call<void>("set_acrylic", { on })
+export const setAcrylic = (on: boolean, dark: boolean) =>
+  call<void>("set_acrylic", { on, dark })
 
 export const publishSchema = (site: string, name: string, sessionId: string) =>
   call<string>("publish_schema", { site, name, sessionId })
@@ -165,3 +166,15 @@ export const forgetAccount = () => call<void>("forget_account")
 
 export const run = <A>(effect: Effect.Effect<A, DbError>) =>
   Effect.runPromise(effect)
+
+export const databases = (config: SessionConfig) =>
+  call<string[]>("databases", { config })
+
+export const agentChat = (prompt: string) =>
+  call<string>("agent_chat", { prompt })
+
+export const readDocument = (path: string) =>
+  call<string>("read_document", { path })
+
+export const writeDocument = (path: string, text: string) =>
+  call<void>("write_document", { path, text })
