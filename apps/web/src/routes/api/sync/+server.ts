@@ -11,6 +11,33 @@ import type { SyncPayload } from "$lib/types"
 
 import type { RequestHandler } from "./$types"
 
+// the desktop webview posts from its own origin, so the route answers preflight
+const ORIGINS = new Set([
+  "http://tauri.localhost",
+  "https://tauri.localhost",
+  "tauri://localhost",
+  "http://localhost:1421",
+])
+
+function allow(request: Request): Record<string, string> {
+  const origin = request.headers.get("origin") ?? ""
+
+  if (!ORIGINS.has(origin)) {
+    return {}
+  }
+
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-headers": "authorization, content-type",
+    "access-control-allow-methods": "POST, DELETE, OPTIONS",
+    "access-control-max-age": "86400",
+    vary: "origin",
+  }
+}
+
+export const OPTIONS: RequestHandler = async ({ request }) =>
+  new Response(null, { status: 204, headers: allow(request) })
+
 export const POST: RequestHandler = async ({ request }) => {
   const session = await auth.api.getSession({ headers: request.headers })
 
@@ -53,32 +80,35 @@ export const POST: RequestHandler = async ({ request }) => {
     }
   })
 
-  return json({
-    preferences: await db
-      .select({ key: syncPreference.key, value: syncPreference.value })
-      .from(syncPreference)
-      .where(eq(syncPreference.userId, userId)),
-    recents: await db
-      .select({
-        url: syncRecent.url,
-        kind: syncRecent.kind,
-        label: syncRecent.label,
-        detail: syncRecent.detail,
-        openedAt: syncRecent.openedAt,
-      })
-      .from(syncRecent)
-      .where(eq(syncRecent.userId, userId)),
-    queries: await db
-      .select({
-        id: syncQuery.id,
-        name: syncQuery.name,
-        sql: syncQuery.sql,
-        target: syncQuery.target,
-        savedAt: syncQuery.savedAt,
-      })
-      .from(syncQuery)
-      .where(eq(syncQuery.userId, userId)),
-  })
+  return json(
+    {
+      preferences: await db
+        .select({ key: syncPreference.key, value: syncPreference.value })
+        .from(syncPreference)
+        .where(eq(syncPreference.userId, userId)),
+      recents: await db
+        .select({
+          url: syncRecent.url,
+          kind: syncRecent.kind,
+          label: syncRecent.label,
+          detail: syncRecent.detail,
+          openedAt: syncRecent.openedAt,
+        })
+        .from(syncRecent)
+        .where(eq(syncRecent.userId, userId)),
+      queries: await db
+        .select({
+          id: syncQuery.id,
+          name: syncQuery.name,
+          sql: syncQuery.sql,
+          target: syncQuery.target,
+          savedAt: syncQuery.savedAt,
+        })
+        .from(syncQuery)
+        .where(eq(syncQuery.userId, userId)),
+    },
+    { headers: allow(request) },
+  )
 }
 
 export const DELETE: RequestHandler = async ({ request }) => {
@@ -96,5 +126,5 @@ export const DELETE: RequestHandler = async ({ request }) => {
     await tx.delete(syncQuery).where(eq(syncQuery.userId, userId))
   })
 
-  return json({ cleared: true })
+  return json({ cleared: true }, { headers: allow(request) })
 }
