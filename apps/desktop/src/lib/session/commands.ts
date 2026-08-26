@@ -45,17 +45,30 @@ export function blankConfig(kind: Engine = "postgres"): SessionConfig {
     path: "",
     url: "",
     token: "",
+    warehouse: "",
+    schema: "",
     tls: "prefer",
     readOnly: true,
   }
 }
 
 export function describe(config: SessionConfig) {
-  if (config.kind === "sqlite") {
-    return config.path
+  if (config.path) {
+    return `${config.kind}://${config.path}`
   }
 
-  return `postgres://${config.user}@${config.host}:${config.port}/${config.database}`
+  if (config.url) {
+    const bare = config.url.replace(/^https?:\/\//, "").replace(/\/+$/, "")
+
+    return config.database
+      ? `${config.kind}://${bare}/${config.database}`
+      : `${config.kind}://${bare}`
+  }
+
+  const host = config.host || "127.0.0.1"
+  const port = config.port || "5432"
+
+  return `${config.kind}://${config.user}@${host}:${port}/${config.database}`
 }
 
 export const check = (config: SessionConfig) =>
@@ -71,10 +84,22 @@ export const connect = (config: SessionConfig) =>
 
 export const disconnect = (id: string) => call<void>("disconnect", { id })
 
+export const setReadOnly = (id: string, on: boolean) =>
+  call<void>("set_read_only", { id, on })
+
 export const tables = (id: string) => call<TableInfo[]>("tables", { id })
 
 export const tableRows = (id: string, table: string, limit = 500, offset = 0) =>
   call<QueryResult>("table_rows", { id, table, limit, offset })
+
+export const applyEdits = (
+  id: string,
+  table: string,
+  edits: {
+    keys: Record<string, string | null>
+    set: Record<string, string | null>
+  }[],
+) => call<number>("apply_edits", { id, table, edits })
 
 export const runQuery = (id: string, sql: string) =>
   call<QueryResult>("run_query", { id, sql })
@@ -88,6 +113,12 @@ export const scanLocal = () =>
       onTimeout: () => [] as Discovery[],
       onSuccess: found => found,
     }),
+  )
+
+export const checkSql = (sql: string, dialect: string) =>
+  call<{ line: number; column: number; offset: number; text: string } | null>(
+    "check_sql",
+    { sql, dialect },
   )
 
 export const highlightSql = (sql: string, dialect: string) =>
@@ -118,6 +149,12 @@ export const publishSchema = (site: string, name: string, sessionId: string) =>
 
 export const savedLogins = () => call<SavedLogin[]>("saved_logins")
 
+export const probeRecents = (items: { url: string; kind: string }[]) =>
+  call<string[]>("probe_recents", { items })
+
+export const saveConnection = (config: SessionConfig) =>
+  call<string>("save_connection", { config })
+
 export const forgetLogin = (url: string) => call<void>("forget_login", { url })
 
 export const forgetAllLogins = () => call<void>("forget_all_logins")
@@ -145,18 +182,7 @@ export const forgetProvider = (id: string) =>
 export const connectOpenrouter = (model: string) =>
   call<Provider>("connect_openrouter", { model })
 
-export const askSql = (providerId: string, prompt: string, sessionId: string) =>
-  call<string>("ask_sql", { providerId, prompt, sessionId })
-
-export const agentStart = (program: string, args: string[]) =>
-  call<void>("agent_start", { program, args })
-
-export const agentStop = () => call<void>("agent_stop")
-
-export const agentReady = () => call<boolean>("agent_ready")
-
-export const agentSql = (prompt: string, sessionId: string) =>
-  call<string>("agent_sql", { prompt, sessionId })
+export const openrouterModels = () => call<string[]>("openrouter_models")
 
 export const accountToken = () => call<string | null>("account_token")
 
@@ -169,9 +195,6 @@ export const run = <A>(effect: Effect.Effect<A, DbError>) =>
 
 export const databases = (config: SessionConfig) =>
   call<string[]>("databases", { config })
-
-export const agentChat = (prompt: string) =>
-  call<string>("agent_chat", { prompt })
 
 export const readDocument = (path: string) =>
   call<string>("read_document", { path })

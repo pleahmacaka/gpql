@@ -30,6 +30,8 @@ export interface SessionConfig {
   path: string
   url: string
   token: string
+  warehouse: string
+  schema: string
   tls: string
   readOnly: boolean
   [key: string]: string | boolean

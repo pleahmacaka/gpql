@@ -1,4 +1,6 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages"
+
   import { WindowChrome } from "@gpql/ui"
 
   import { workspace } from "$lib/session/workspace.svelte"
@@ -30,13 +32,13 @@
 </script>
 
 <WindowChrome
-  chip={workspace.session?.label ?? "no session"}
-  chipIcon={workspace.session
-    ? workspace.session.kind === "sqlite"
-      ? "lucide:file"
-      : "lucide:database"
-    : "lucide:plus"}
-  tab={workspace.session ? label : null}
+  chip={workspace.erd?.name ?? workspace.session?.label ?? m.no_session()}
+  chipIcon={workspace.erd
+    ? "lucide:git-fork"
+    : workspace.session
+      ? workspace.iconFor(workspace.session.kind)
+      : "lucide:plus"}
+  tab={workspace.session && !workspace.erd ? label : null}
   live
   onchip={onToggleMenu}
   ontab={pick}

@@ -1,8 +1,67 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
+  import { onMount } from "svelte"
+
   import { ContextMenu, Icon, ListRow } from "@gpql/ui"
   import { workspace } from "$lib/session/workspace.svelte"
+  import type { SessionConfig } from "$lib/types"
+
+  type Props = { onedit?: (config: SessionConfig) => void }
+
+  let { onedit }: Props = $props()
+
+  let shaking = $state<string | null>(null)
+
+  onMount(() => {
+    workspace.sniff()
+  })
+
+  function reason(url: string) {
+    const code = workspace.unreachable[url]
+
+    if (code === "gone") {
+      return m.file_gone()
+    }
+
+    if (code === "refused") {
+      return m.bad_credentials()
+    }
+
+    if (code === "forgotten") {
+      return m.login_forgotten()
+    }
+
+    return m.cannot_connect()
+  }
+
+  function refuse(url: string) {
+    shaking = url
+
+    setTimeout(() => {
+      if (shaking === url) {
+        shaking = null
+      }
+    }, 400)
+  }
+
+  function pick(url: string, kind: string) {
+    if (workspace.unreachable[url]) {
+      refuse(url)
+
+      return
+    }
+
+    workspace.resume(url, kind)
+  }
+
+  async function edit(url: string) {
+    const config = await workspace.settings(url)
+
+    if (config) {
+      onedit?.(config)
+    }
+  }
 
   let menu = $state<{
     x: number
@@ -20,7 +79,12 @@
         {
           label: m.connect(),
           icon: "lucide:plug",
-          run: () => workspace.resume(url),
+          run: () => workspace.resume(url, "", true),
+        },
+        {
+          label: m.menu_edit(),
+          icon: "lucide:pencil",
+          run: () => edit(url),
         },
         {
           label: m.menu_copy_address(),
@@ -41,7 +105,10 @@
 <div class="space-y-1">
   <button
     type="button"
-    onclick={() => (workspace.mode = "new")}
+    onclick={() => {
+      workspace.editing = null
+      workspace.mode = "new"
+    }}
     class="flex w-full items-center justify-center gap-1.5 rounded-field
       border border-dashed border-base-content/20 px-3 py-2 text-sm
       text-base-content/60 transition-colors hover:border-primary/50
@@ -66,8 +133,18 @@
             ? "lucide:file"
             : "lucide:database"}
         title={entry.label}
-        detail={entry.detail}
-        onclick={() => workspace.resume(entry.url, entry.kind)}
+        detail={workspace.dialing === entry.url
+          ? m.connecting_now()
+          : workspace.unreachable[entry.url]
+            ? reason(entry.url)
+            : entry.detail}
+        tone={workspace.unreachable[entry.url] && workspace.dialing !== entry.url
+          ? "bad"
+          : "plain"}
+        busy={workspace.dialing === entry.url}
+        shaking={shaking === entry.url}
+        onclick={() => pick(entry.url, entry.kind)}
+        onedit={entry.kind === "erd" ? undefined : () => edit(entry.url)}
           ondismiss={() => workspace.forgetRecent(entry.url)}
         />
       </div>

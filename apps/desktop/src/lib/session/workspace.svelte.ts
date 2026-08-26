@@ -1,9 +1,11 @@
 import { desc, eq } from "drizzle-orm"
 
 import { local } from "$lib/db/client"
-import { ErdDocument } from "$lib/erd/document.svelte"
 import { migrate } from "$lib/db/migrate"
 import { preference, recent, savedQuery } from "$lib/db/schema"
+import { ErdDocument } from "$lib/erd/document.svelte"
+import * as m from "$lib/paraglide/messages"
+import { getLocale, setLocale } from "$lib/paraglide/runtime"
 import type {
   BackendInfo,
   Credential,
@@ -11,19 +13,22 @@ import type {
   Mode,
   Provider,
   QueryResult,
+  SavedLogin,
   SessionConfig,
   SessionHandle,
   Tab,
   TableInfo,
   TableSchema,
 } from "$lib/types"
+
 import * as api from "./commands"
-import { friendly } from "./errors"
 import { blankConfig } from "./commands"
+import { friendly } from "./errors"
 
-const PAGE = 500
-
-export const DEFAULT_AGENT = "npx @zed-industries/claude-code-acp"
+const PAGE = 1000
+const LIMITS = [200, 500, 1000, 5000, 20000]
+const WINDOW = 5
+const WINDOWS = [0, 1, 5, 15, 30]
 
 export type ChatTurn = { role: "you" | "agent"; text: string }
 
@@ -33,6 +38,37 @@ export type Scheme = (typeof schemes)[number]
 
 function readScheme(value: string | undefined): Scheme {
   return schemes.includes(value as Scheme) ? (value as Scheme) : "system"
+}
+
+function why(failure: string) {
+  return /auth|password|credential|401|403|unauthor|permission|refused the/i.test(
+    failure,
+  )
+    ? "refused"
+    : "down"
+}
+
+function tail(url: string) {
+  return url.slice(url.indexOf("://") + 3)
+}
+
+function configFrom(login: SavedLogin, readOnly: boolean): SessionConfig {
+  return {
+    ...blankConfig(login.kind),
+    kind: login.kind,
+    host: login.host,
+    port: login.port,
+    user: login.user,
+    password: login.password,
+    database: login.database,
+    path: login.path,
+    url: login.endpoint,
+    token: login.token,
+    tls: login.tls,
+    warehouse: login.warehouse,
+    schema: login.schema,
+    readOnly,
+  }
 }
 
 export class Workspace {
@@ -45,8 +81,17 @@ export class Workspace {
   systemDark = $state(false)
   compact = $state(false)
   readOnly = $state(true)
+  writeWindow = $state(WINDOW)
+  picked = $state("")
+  locale = $state(getLocale())
+  fuse: number | null = null
   acrylic = $state(false)
   autoscan = $state(true)
+  motion = $state(true)
+  ai = $state(true)
+  aiGroups = $state(false)
+  minimap = $state(true)
+  rowLimit = $state(PAGE)
   settled = $state(true)
   texture = $state(35)
 
@@ -70,9 +115,11 @@ export class Workspace {
   presets = $state<Credential[]>([])
   catalog = $state<BackendInfo[]>([])
   servers = $state<string[]>([])
-  agent = $state(false)
   shared = $state("")
-  agentCommand = $state("")
+  connecting = $state(false)
+  unreachable = $state<Record<string, string>>({})
+  dialing = $state<string | null>(null)
+  editing = $state<string | null>(null)
   chatOpen = $state(false)
   chatBusy = $state(false)
   chatError = $state("")
@@ -140,12 +187,17 @@ export class Workspace {
     this.watchSystemScheme()
     this.scheme = readScheme(settings.get("scheme"))
     this.compact = settings.get("compact") === "on"
-    this.readOnly = settings.get("readOnly") !== "off"
+    this.readOnly = true
+    this.writeWindow = Number(settings.get("writeWindow") ?? WINDOW) || 0
+    this.picked = settings.get("model") ?? ""
     this.acrylic = settings.get("acrylic") === "on"
     this.autoscan = settings.get("autoscan") !== "off"
+    this.motion = settings.get("motion") !== "off"
+    this.ai = settings.get("ai") !== "off"
+    this.aiGroups = settings.get("aiGroups") === "on"
+    this.minimap = settings.get("minimap") !== "off"
+    this.rowLimit = Number(settings.get("rowLimit") ?? PAGE) || PAGE
     this.settled = settings.get("settled") === "yes"
-
-    this.agentCommand = settings.get("agent") ?? ""
 
     for (const [key, value] of settings) {
       if (key.startsWith("lsp:")) {
@@ -178,7 +230,16 @@ export class Workspace {
   }
 
   async toggle(
-    key: "dark" | "compact" | "readOnly" | "acrylic" | "autoscan",
+    key:
+      | "dark"
+      | "compact"
+      | "readOnly"
+      | "acrylic"
+      | "autoscan"
+      | "motion"
+      | "ai"
+      | "aiGroups"
+      | "minimap",
   ): Promise<void> {
     if (key === "dark") {
       return this.setScheme(this.dark ? "light" : "dark")
@@ -187,9 +248,44 @@ export class Workspace {
     this[key] = !this[key]
     await this.remember(key, this[key] ? "on" : "off")
 
+    if (key === "readOnly") {
+      if (this.session) {
+        await api.run(api.setReadOnly(this.session.id, this.readOnly))
+        this.session = { ...this.session, readOnly: this.readOnly }
+      }
+
+      this.countDown()
+    }
+
     if (key === "acrylic") {
       await this.paint()
     }
+  }
+
+  countDown() {
+    if (this.fuse !== null) {
+      clearTimeout(this.fuse)
+      this.fuse = null
+    }
+
+    if (this.readOnly || this.writeWindow === 0) {
+      return
+    }
+
+    this.fuse = setTimeout(
+      () => {
+        if (!this.readOnly) {
+          void this.toggle("readOnly")
+        }
+      },
+      this.writeWindow * 60 * 1000,
+    ) as unknown as number
+  }
+
+  async setWriteWindow(minutes: number) {
+    this.writeWindow = minutes
+    await this.remember("writeWindow", String(minutes))
+    this.countDown()
   }
 
   async settle() {
@@ -214,6 +310,67 @@ export class Workspace {
     })
   }
 
+  get windows() {
+    return WINDOWS
+  }
+
+  get limits() {
+    return LIMITS
+  }
+
+  async setRowLimit(rows: number) {
+    this.rowLimit = rows
+    await this.remember("rowLimit", String(rows))
+
+    if (this.selected) {
+      await this.select(this.selected)
+    }
+  }
+
+  async saveLayout(layout: {
+    spots: Record<string, { x: number; y: number }>
+    groups: { id: string; name: string; tables: string[] }[]
+  }) {
+    if (!this.session) {
+      return
+    }
+
+    await this.remember(`layout:${this.session.label}`, JSON.stringify(layout))
+  }
+
+  async loadLayout(label: string) {
+    const [row] = await local
+      .select()
+      .from(preference)
+      .where(eq(preference.key, `layout:${label}`))
+      .limit(1)
+
+    if (!row) {
+      return { spots: {}, groups: [] }
+    }
+
+    try {
+      return JSON.parse(row.value) as {
+        spots: Record<string, { x: number; y: number }>
+        groups: { id: string; name: string; tables: string[] }[]
+      }
+    } catch {
+      return { spots: {}, groups: [] }
+    }
+  }
+
+  async wipeLocal() {
+    await local.delete(recent)
+    await local.delete(savedQuery)
+    await local.delete(preference)
+
+    this.recents = []
+    this.saved = []
+    this.unreachable = {}
+
+    return "local data cleared"
+  }
+
   async paint() {
     await api.run(api.setAcrylic(this.acrylic, this.dark))
   }
@@ -229,6 +386,28 @@ export class Workspace {
       .from(recent)
       .orderBy(desc(recent.openedAt))
       .limit(8)
+
+    await this.sniff()
+  }
+
+  async sniff() {
+    const items = this.recents.map(entry => ({
+      url: entry.url,
+      kind: entry.kind,
+    }))
+
+    if (items.length === 0) {
+      return
+    }
+
+    const answers = await api.run(api.probeRecents(items))
+    const found: Record<string, string> = {}
+
+    items.forEach((item, index) => {
+      found[item.url] = answers[index] ?? ""
+    })
+
+    this.unreachable = found
   }
 
   async reloadSaved() {
@@ -271,20 +450,17 @@ export class Workspace {
     this.presets = await api.run(api.credentials())
   }
 
-  async ensureAgent() {
-    if (this.agent) {
+  async say(prompt: string) {
+    const text = prompt.trim()
+    const provider = this.model
+
+    if (text === "" || this.chatBusy) {
       return
     }
 
-    const line = this.agentCommand.trim() || DEFAULT_AGENT
+    if (!provider) {
+      this.chatError = friendly("gpql.no_model")
 
-    await this.startAgent(line)
-  }
-
-  async say(prompt: string) {
-    const text = prompt.trim()
-
-    if (text === "" || this.chatBusy) {
       return
     }
 
@@ -293,9 +469,8 @@ export class Workspace {
     this.chatError = ""
 
     try {
-      await this.ensureAgent()
-
-      const answer = await api.run(api.agentChat(text))
+      const { talk } = await import("$lib/ai/chat")
+      const answer = await talk(provider, this.chat, this.schema)
 
       this.chat = [...this.chat, { role: "agent", text: answer }]
     } catch (failure) {
@@ -305,21 +480,22 @@ export class Workspace {
     }
   }
 
-  async startAgent(line: string) {
-    const [program, ...args] = line.trim().split(/\s+/)
+  get model() {
+    return (
+      this.providers.find(entry => entry.id === this.picked) ??
+      this.providers[0] ??
+      null
+    )
+  }
 
-    if (!program) {
-      await api.run(api.agentStop())
-      this.agent = false
-      await this.remember("agent", "")
+  speak(next: "en" | "ko") {
+    setLocale(next, { reload: false })
+    this.locale = next
+  }
 
-      return
-    }
-
-    await api.run(api.agentStart(program, args))
-    this.agent = await api.run(api.agentReady())
-    this.agentCommand = line
-    await this.remember("agent", line)
+  async pick(id: string) {
+    this.picked = id
+    await this.remember("model", id)
   }
 
   async reloadProviders() {
@@ -335,7 +511,15 @@ export class Workspace {
     this.queryError = null
 
     try {
-      this.sql = await api.run(api.askSql(providerId, prompt, this.session.id))
+      const provider = this.providers.find(entry => entry.id === providerId)
+
+      if (!provider) {
+        throw new Error("gpql.no_model")
+      }
+
+      const { writeSql } = await import("$lib/ai/sql")
+
+      this.sql = await writeSql(provider, prompt, this.schema)
       this.selection = { start: 0, end: 0 }
     } catch (failure) {
       this.queryError = friendly(String(failure))
@@ -382,7 +566,17 @@ export class Workspace {
           set: { openedAt: stamp, label: handle.label, detail: handle.detail },
         })
 
+      const stale = this.editing
+
+      if (stale && stale !== api.describe(config)) {
+        await local.delete(recent).where(eq(recent.url, stale))
+        await api.run(api.forgetLogin(stale))
+      }
+
+      this.editing = null
+      this.erd = null
       this.session = handle
+      this.connecting = false
       this.tab = "data"
       await this.reloadRecents()
       await this.loadTables()
@@ -394,30 +588,97 @@ export class Workspace {
     }
   }
 
-  async resume(url: string, kind = "") {
+  async resume(url: string, kind = "", force = false) {
+    if (!force && this.unreachable[url]) {
+      return
+    }
+
     if (kind === "erd") {
-      await this.startErd(url, true)
+      this.dialing = url
+
+      try {
+        await this.startErd(url, true)
+        this.unreachable = { ...this.unreachable, [url]: "" }
+      } catch {
+        this.unreachable = { ...this.unreachable, [url]: "gone" }
+      } finally {
+        this.dialing = null
+      }
 
       return
     }
 
     const logins = await api.run(api.savedLogins())
-    const match = logins.find(login => login.url === url)
+    const match =
+      logins.find(login => login.url === url) ??
+      logins.find(login => tail(login.url) === tail(url))
 
     if (!match) {
-      this.error = friendly("gpql.login_gone")
+      this.unreachable = { ...this.unreachable, [url]: "forgotten" }
 
       return
     }
 
-    await this.open({
-      ...blankConfig(match.kind),
-      ...match,
-      readOnly: this.readOnly,
-    })
+    this.dialing = url
+
+    try {
+      await this.open(configFrom(match, this.readOnly))
+      this.unreachable = { ...this.unreachable, [url]: "" }
+    } catch (failure) {
+      this.error = null
+      this.unreachable = { ...this.unreachable, [url]: why(String(failure)) }
+    } finally {
+      this.dialing = null
+    }
+  }
+
+  async keepConnection(config: SessionConfig) {
+    const url = await api.run(api.saveConnection(config))
+    const stale = this.editing
+    const stamp = Math.floor(Date.now() / 1000)
+    const label = config.database || config.path || config.kind
+    const detail = config.url || `${config.host}:${config.port}`
+
+    if (stale && stale !== url) {
+      await local.delete(recent).where(eq(recent.url, stale))
+      await api.run(api.forgetLogin(stale))
+    }
+
+    await local
+      .insert(recent)
+      .values({ url, kind: config.kind, label, detail, openedAt: stamp })
+      .onConflictDoUpdate({
+        target: recent.url,
+        set: { openedAt: stamp, label, detail },
+      })
+
+    this.editing = null
+    await this.reloadRecents()
+
+    return url
+  }
+
+  async settings(url: string) {
+    const logins = await api.run(api.savedLogins())
+    const match =
+      logins.find(login => login.url === url) ??
+      logins.find(login => tail(login.url) === tail(url))
+
+    if (!match) {
+      return null
+    }
+
+    this.editing = url
+
+    return configFrom(match, this.readOnly)
   }
 
   async startErd(path: string, existing: boolean) {
+    if (this.session) {
+      await this.close()
+    }
+
+    this.connecting = false
     this.erd = existing
       ? await ErdDocument.open(path)
       : await ErdDocument.create(path)
@@ -444,6 +705,7 @@ export class Workspace {
   closeErd() {
     this.erd = null
     this.mode = "recent"
+    this.connecting = true
   }
 
   async close() {
@@ -451,8 +713,15 @@ export class Workspace {
       return
     }
 
-    await api.run(api.disconnect(this.session.id))
+    try {
+      await api.run(api.disconnect(this.session.id))
+    } catch {
+      this.error = null
+    }
+
     this.session = null
+    this.readOnly = true
+    this.countDown()
     this.tables = []
     this.schema = []
     this.rows = null
@@ -475,13 +744,65 @@ export class Workspace {
     }
   }
 
+  iconFor(kind: string) {
+    const found = this.catalog.find(entry => entry.id === kind)
+
+    return found?.icon ?? "lucide:database"
+  }
+
+  get keyColumns() {
+    const found = this.schema.find(entry => entry.name === this.selected)
+
+    return (found?.columns ?? [])
+      .filter(column => column.primaryKey)
+      .map(column => column.name)
+  }
+
+  get writable() {
+    return this.session !== null && !this.session.readOnly
+  }
+
+  async applyEdits(
+    edits: {
+      keys: Record<string, string | null>
+      set: Record<string, string | null>
+    }[],
+  ) {
+    if (!this.session || !this.selected) {
+      return
+    }
+
+    this.busy = true
+    this.error = null
+
+    try {
+      await api.run(api.applyEdits(this.session.id, this.selected, edits))
+      this.countDown()
+      await this.select(this.selected)
+    } catch (failure) {
+      this.error = String(failure)
+      throw failure
+    } finally {
+      this.busy = false
+    }
+  }
+
   async select(table: string) {
     if (!this.session) {
       return
     }
 
     this.selected = table
-    this.rows = await api.run(api.tableRows(this.session.id, table, PAGE, 0))
+    this.busy = true
+
+    try {
+      this.rows = await api.run(
+        api.tableRows(this.session.id, table, this.rowLimit, 0),
+      )
+      await this.loadSchema()
+    } finally {
+      this.busy = false
+    }
   }
 
   async loadSchema() {
@@ -508,6 +829,19 @@ export class Workspace {
     this.queryError = null
 
     try {
+      const fault = await api.run(api.checkSql(this.chosen, this.dialect))
+
+      if (fault) {
+        this.queryError = m.sql_fault({
+          line: fault.line + 1,
+          column: fault.column + 1,
+          text: fault.text.slice(0, 40) || "?",
+        })
+        this.queryResult = null
+
+        return
+      }
+
       this.queryResult = await api.run(
         api.runQuery(this.session.id, this.chosen),
       )

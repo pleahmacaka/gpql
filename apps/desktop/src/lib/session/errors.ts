@@ -8,6 +8,7 @@ const known: Record<string, () => string> = {
   "gpql.ipv6_only": m.error_ipv6_only,
   "gpql.needs_tenant": m.error_needs_tenant,
   "gpql.login_gone": m.error_login_gone,
+  "gpql.no_model": m.no_model,
 }
 
 export function friendly(text: string) {

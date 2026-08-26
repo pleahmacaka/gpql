@@ -13,9 +13,9 @@
   import { workspace } from "$lib/session/workspace.svelte"
   import type { Probe, SessionConfig } from "$lib/types"
 
-  type Props = { seed?: SessionConfig | null }
+  type Props = { seed?: SessionConfig | null; onsaved?: () => void }
 
-  let { seed = null }: Props = $props()
+  let { seed = null, onsaved }: Props = $props()
 
   let config = $state<SessionConfig>(
     untrack(() => (seed ? { ...seed } : blankConfig())),
@@ -155,6 +155,15 @@
     }
   }
 
+  async function keep() {
+    try {
+      await workspace.keepConnection(config)
+      onsaved?.()
+    } catch (failure) {
+      probe = { tone: "bad", text: friendly(String(failure)) }
+    }
+  }
+
   async function start() {
     try {
       await workspace.open(config)
@@ -172,6 +181,7 @@
   readOnly={workspace.readOnly}
   busy={workspace.busy}
   onconnect={start}
+  onkeep={keep}
   ontoggleReadOnly={() => workspace.toggle("readOnly")}
   onbrowse={pickFile}
   databases={catalogue}
@@ -182,6 +192,7 @@
     readOnly: m.read_only(),
     readOnlyHint: m.read_only_hint(),
     connect: m.connect(),
+    save: m.save_connection(),
     keys: m.keys_hint(),
     browse: m.browse(),
     tlsAuto: m.tls_auto(),

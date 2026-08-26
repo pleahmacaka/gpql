@@ -9,6 +9,11 @@ export interface SavedLogin {
   password: string
   database: string
   path: string
+  endpoint: string
+  token: string
+  tls: string
+  warehouse: string
+  schema: string
 }
 
 export interface Credential {

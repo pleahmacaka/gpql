@@ -1,7 +1,9 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { Icon } from "@gpql/ui"
+  import { scale } from "svelte/transition"
+
+  import { Icon, pop } from "@gpql/ui"
   import { ListRow as ListRow } from "@gpql/ui"
   import { workspace } from "$lib/session/workspace.svelte"
 
@@ -9,12 +11,57 @@
 
   let { onclose }: Props = $props()
 
+  let shaking = $state<string | null>(null)
+
+  function reason(url: string) {
+    const code = workspace.unreachable[url]
+
+    if (code === "gone") {
+      return m.file_gone()
+    }
+
+    if (code === "refused") {
+      return m.bad_credentials()
+    }
+
+    if (code === "forgotten") {
+      return m.login_forgotten()
+    }
+
+    return m.cannot_connect()
+  }
+
   async function resume(url: string) {
-    onclose()
+    if (workspace.unreachable[url]) {
+      shaking = url
+
+      setTimeout(() => {
+        if (shaking === url) {
+          shaking = null
+        }
+      }, 400)
+
+      return
+    }
+
     await workspace.resume(url)
+
+    if (!workspace.unreachable[url]) {
+      onclose()
+    }
   }
 
   async function fresh() {
+    onclose()
+    workspace.mode = "new"
+    workspace.connecting = true
+
+    if (!workspace.session) {
+      await workspace.close()
+    }
+  }
+
+  async function leave() {
     onclose()
     await workspace.close()
   }
@@ -28,7 +75,8 @@
 ></div>
 
 <div
-  class="absolute top-10 left-16 z-40 w-96 rounded-box bg-base-100 p-3 lift"
+  transition:scale={pop()}
+  class="absolute top-10 left-16 z-40 w-96 rounded-box floating p-3 lift"
   role="menu"
   tabindex="-1"
 >
@@ -41,16 +89,37 @@
   {:else}
     {#each workspace.recents as entry (entry.url)}
       <ListRow
-        icon={entry.kind === "sqlite" ? "lucide:file" : "lucide:database"}
+        icon={workspace.iconFor(entry.kind)}
         title={entry.label}
-        detail={entry.detail}
+        detail={workspace.dialing === entry.url
+          ? m.connecting_now()
+          : workspace.unreachable[entry.url]
+            ? reason(entry.url)
+            : entry.detail}
+        tone={workspace.unreachable[entry.url] && workspace.dialing !== entry.url
+          ? "bad"
+          : "plain"}
+        busy={workspace.dialing === entry.url}
+        shaking={shaking === entry.url}
         onclick={() => resume(entry.url)}
         ondismiss={() => workspace.forgetRecent(entry.url)}
       />
     {/each}
   {/if}
 
-  <div class="mt-2 border-t border-base-content/8 pt-2">
+  <div class="mt-2 space-y-1 border-t border-base-content/8 pt-2">
+    {#if workspace.session}
+      <button
+        type="button"
+        onclick={leave}
+        class="flex w-full items-center gap-2 rounded-field px-3 py-2 text-sm
+          hover:bg-base-200"
+      >
+        <Icon icon="lucide:power" class="size-4 text-base-content/50" />
+        {m.action_close()}
+      </button>
+    {/if}
+
     <button
       type="button"
       onclick={fresh}

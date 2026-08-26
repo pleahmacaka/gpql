@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { Icon, OptionRow, Segmented } from "@gpql/ui"
+  import { Icon, Logo, OptionRow, Segmented } from "@gpql/ui"
 
   import { workspace } from "$lib/session/workspace.svelte"
 
@@ -16,6 +16,8 @@
 
 <div class="flex h-full items-center justify-center p-6">
   <section class="w-lg max-w-full rounded-box bg-base-100 p-6 lift">
+    <Logo class="size-10 pb-2 text-base-content/80" />
+
     <p class="text-xs text-base-content/45">{m.first_run_eyebrow()}</p>
 
     <h1 class="pt-1 text-lg font-medium">{m.first_run_title()}</h1>
@@ -63,6 +65,14 @@
           detail={m.first_run_readonly_hint()}
           on={workspace.readOnly}
           onclick={() => workspace.toggle("readOnly")}
+        />
+
+        <OptionRow
+          icon="lucide:sparkles"
+          title={m.ai_on()}
+          detail={m.ai_on_hint()}
+          on={workspace.ai}
+          onclick={() => workspace.toggle("ai")}
         />
 
         <OptionRow

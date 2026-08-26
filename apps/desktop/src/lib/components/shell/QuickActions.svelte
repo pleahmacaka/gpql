@@ -1,7 +1,9 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { Icon } from "@gpql/ui"
+  import { fade, scale } from "svelte/transition"
+
+  import { Icon, pop, veil } from "@gpql/ui"
 
   import { workspace } from "$lib/session/workspace.svelte"
   import type { Mode, Tab } from "$lib/types"
@@ -86,8 +88,8 @@
         id: `recent:${entry.url}`,
         label: entry.label,
         hint: entry.detail,
-        icon: entry.kind === "sqlite" ? "lucide:file" : "lucide:database",
-        run: () => workspace.resume(entry.url),
+        icon: workspace.iconFor(entry.kind),
+        run: () => workspace.resume(entry.url, entry.kind),
       })
     }
 
@@ -188,14 +190,16 @@
 </script>
 
 <div
+  transition:fade={veil()}
   class="fixed inset-0 z-60 scrim"
   role="presentation"
   onclick={onclose}
 ></div>
 
 <div
+  transition:scale={pop()}
   class="fixed inset-x-0 top-24 z-60 mx-auto w-lg max-w-11/12 overflow-hidden
-    rounded-box bg-base-100 lift"
+    rounded-box floating lift"
   role="dialog"
   aria-label="Quick actions"
   tabindex="-1"
@@ -225,7 +229,10 @@
         class="flex w-full items-center gap-3 rounded-field px-2 py-2 text-left
           {index === cursor ? 'bg-primary/10 text-primary' : ''}"
       >
-        <Icon icon={action.icon} class="size-4 shrink-0 opacity-60" />
+        <Icon
+          icon={action.icon}
+          class="size-4 shrink-0 stroke-current stroke-1 opacity-60"
+        />
 
         <span class="min-w-0 flex-1 truncate text-sm">{action.label}</span>
 
