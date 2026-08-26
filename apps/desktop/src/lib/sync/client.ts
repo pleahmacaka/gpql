@@ -8,7 +8,7 @@ import type { SyncPayload } from "$lib/types"
 
 const fallback = import.meta.env.DEV
   ? "http://localhost:5173"
-  : "https://gpql.app"
+  : "https://gpql.dev"
 
 export const site = import.meta.env.VITE_GPQL_SITE ?? fallback
 
