@@ -585,8 +585,8 @@
 
       {#if notice}
         <p
-          class="max-w-64 rounded-field floating px-2 py-1 text-right text-xs
-            text-error lift"
+          class="max-w-72 rounded-field floating px-2 py-1 text-right text-xs
+            break-keep text-error lift"
         >
           {notice}
         </p>
@@ -594,8 +594,8 @@
 
       {#if armed && board.picked.length === 0}
         <p
-          class="max-w-56 rounded-field floating px-2 py-1 text-right text-xs
-            text-base-content/60 lift"
+          class="max-w-72 rounded-field floating px-2 py-1 text-right text-xs
+            break-keep text-base-content/60 lift"
         >
           {words.warn}
         </p>
