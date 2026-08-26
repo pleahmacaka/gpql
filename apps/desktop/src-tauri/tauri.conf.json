@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "gpql",
-  "version": "0.1.0",
-  "identifier": "dev.gpql.app",
+  "version": "0.1.1",
+  "identifier": "dev.gpql.dev",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:1421",
