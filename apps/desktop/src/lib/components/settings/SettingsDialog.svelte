@@ -6,9 +6,12 @@
   import { Icon, pop, veil } from "@gpql/ui"
   import { workspace } from "$lib/session/workspace.svelte"
 
+  import { Lazy } from "@gpql/ui"
+
   import AppearancePage from "./AppearancePage.svelte"
   import AccountPage from "./AccountPage.svelte"
   import CredentialsPage from "./CredentialsPage.svelte"
+  import KeysPage from "./KeysPage.svelte"
   import ModelsPage from "./ModelsPage.svelte"
 
   type Props = { onclose: () => void }
@@ -24,6 +27,8 @@
       icon: "lucide:key-round",
     },
     { id: "models", label: m.settings_models(), icon: "lucide:sparkles" },
+    { id: "keys", label: m.settings_keys(), icon: "lucide:command" },
+    { id: "about", label: m.settings_about(), icon: "lucide:info" },
   ]
 
   let page = $state("look")
@@ -92,6 +97,10 @@
         <CredentialsPage />
       {:else if page === "models"}
         <ModelsPage />
+      {:else if page === "keys"}
+        <KeysPage />
+      {:else if page === "about"}
+        <Lazy load={() => import("./AboutPage.svelte")} />
       {:else}
         <AccountPage />
       {/if}

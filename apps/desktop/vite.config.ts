@@ -7,6 +7,8 @@ import tailwindcss from "@tailwindcss/vite"
 
 import { defineConfig } from "vite"
 
+import { version } from "./package.json"
+
 // the paraglide plugin only watches its project file, so message edits need a
 // nudge of their own
 function messages() {
@@ -54,6 +56,9 @@ function messages() {
 
 export default defineConfig({
   clearScreen: false,
+  define: {
+    __GPQL_VERSION__: JSON.stringify(version),
+  },
   server: {
     port: 1421,
     strictPort: true,

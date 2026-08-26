@@ -49,3 +49,10 @@ export interface Probe {
   tone: "idle" | "busy" | "good" | "bad"
   text: string
 }
+
+export interface ReleaseCheck {
+  current: string
+  latest: string
+  link: string
+  fresh: boolean
+}

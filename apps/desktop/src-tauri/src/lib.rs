@@ -512,6 +512,71 @@ async fn save_connection(config: SessionConfig) -> Result<String, String> {
     return Ok(vault::describe(&config));
 }
 
+#[derive(serde::Serialize)]
+struct Release {
+    current: String,
+    latest: String,
+    link: String,
+    fresh: bool,
+}
+
+#[tauri::command]
+async fn latest_release() -> Result<Release, String> {
+    let answer: serde_json::Value = reqwest::Client::new()
+        .get("https://api.github.com/repos/pleahmacaka/gpql/releases/latest")
+        .header("user-agent", "gpql")
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .json()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let latest = answer
+        .get("tag_name")
+        .and_then(|tag| tag.as_str())
+        .ok_or("no release published yet")?
+        .trim_start_matches('v')
+        .to_string();
+
+    let link = answer
+        .get("html_url")
+        .and_then(|url| url.as_str())
+        .unwrap_or("https://github.com/pleahmacaka/gpql/releases/latest")
+        .to_string();
+
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let fresh = older(&current, &latest);
+
+    return Ok(Release {
+        current,
+        latest,
+        link,
+        fresh,
+    });
+}
+
+fn older(current: &str, latest: &str) -> bool {
+    let parts = |text: &str| -> Vec<u32> {
+        text.split('.')
+            .map(|piece| piece.parse::<u32>().unwrap_or(0))
+            .collect()
+    };
+
+    let (mine, theirs) = (parts(current), parts(latest));
+
+    for at in 0..mine.len().max(theirs.len()) {
+        let a = mine.get(at).copied().unwrap_or(0);
+        let b = theirs.get(at).copied().unwrap_or(0);
+
+        if a != b {
+            return a < b;
+        }
+    }
+
+    return false;
+}
+
 #[tauri::command]
 async fn openrouter_models() -> Result<Vec<String>, String> {
     let answer: serde_json::Value = reqwest::Client::new()
@@ -663,6 +728,7 @@ pub fn run() {
             forget_provider,
             connect_openrouter,
             openrouter_models,
+            latest_release,
             saved_logins,
             forget_login,
             forget_all_logins,

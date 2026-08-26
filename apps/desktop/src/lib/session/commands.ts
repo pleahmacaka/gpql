@@ -10,6 +10,7 @@ import type {
   Engine,
   Provider,
   QueryResult,
+  ReleaseCheck,
   SavedLogin,
   SessionConfig,
   SessionHandle,
@@ -183,6 +184,8 @@ export const connectOpenrouter = (model: string) =>
   call<Provider>("connect_openrouter", { model })
 
 export const openrouterModels = () => call<string[]>("openrouter_models")
+
+export const latestRelease = () => call<ReleaseCheck>("latest_release")
 
 export const accountToken = () => call<string | null>("account_token")
 
