@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { Snippet } from "svelte"
 
-  import { Icon } from "./icons"
+  import { Icon } from "../icons"
+  import Logo from "../controls/Logo.svelte"
 
   type Props = {
     chip: string
@@ -29,18 +30,68 @@
     controls,
   }: Props = $props()
 
+  let strip = $state<HTMLDivElement | null>(null)
+  let pill = $state({ left: 0, width: 0 })
+  let settled = $state(false)
+
   const tabs = [
     { label: "Data", icon: "lucide:table-2" },
     { label: "Query", icon: "lucide:terminal" },
     { label: "Schema", icon: "lucide:git-fork" },
   ]
+
+  function measure(active: string) {
+    const found = strip?.querySelector<HTMLElement>(`[data-tab="${active}"]`)
+
+    if (!found) {
+      return
+    }
+
+    pill = { left: found.offsetLeft, width: found.offsetWidth }
+  }
+
+  $effect(() => {
+    const active = tab
+
+    if (!strip || !active) {
+      return
+    }
+
+    measure(active)
+
+    if (settled) {
+      return
+    }
+
+    const frame = requestAnimationFrame(() => {
+      measure(active)
+      settled = true
+    })
+
+    return () => cancelAnimationFrame(frame)
+  })
+
+  $effect(() => {
+    if (!strip || !tab) {
+      return
+    }
+
+    const watcher = new ResizeObserver(() => measure(tab))
+
+    watcher.observe(strip)
+
+    return () => watcher.disconnect()
+  })
 </script>
 
 <header
   data-tauri-drag-region
   class="flex h-11 shrink-0 items-center gap-2 pl-4"
 >
-  <span class="text-sm text-base-content/45">GPQL</span>
+  <span class="flex items-center gap-1.5 text-sm text-base-content/45">
+    <Logo class="size-4 text-base-content/70" plain />
+    GPQL
+  </span>
 
   <svelte:element
     this={live ? "button" : "span"}
@@ -50,14 +101,27 @@
     class="flex items-center gap-2 rounded-field px-2 py-1 text-sm
       {live ? 'transition-colors hover:bg-base-300' : ''}"
   >
-    <Icon icon={chipIcon} class="size-4 text-base-content/50" />
-    <span>{chip}</span>
+    <Icon
+      icon={chipIcon}
+      class="size-4 stroke-current stroke-1 text-base-content/50"
+    />
+    <span class="whitespace-nowrap">{chip}</span>
     <Icon icon="lucide:chevron-down" class="size-3.5 text-base-content/40" />
   </svelte:element>
 
   <div data-tauri-drag-region class="flex flex-1 justify-center">
     {#if tab}
-      <div class="flex gap-1 rounded-selector bg-base-300/60 p-1">
+      <div
+        bind:this={strip}
+        class="relative flex gap-1 rounded-selector bg-base-300/60 p-1"
+      >
+        <span
+          aria-hidden="true"
+          class="absolute top-1 bottom-1 left-0 rounded-selector bg-base-100 hairline transition-all duration-200 ease-out {settled ? '' : 'duration-0'}"
+          style:transform="translateX({pill.left}px)"
+          style:width="{pill.width}px"
+        ></span>
+
         {#each tabs as entry (entry.label)}
           <svelte:element
             this={live ? "button" : "span"}
@@ -65,9 +129,10 @@
             tabindex={live ? 0 : undefined}
             onclick={() => ontab?.(entry.label)}
             aria-pressed={entry.label === tab}
-            class="flex items-center gap-1.5 rounded-selector px-3 py-1 text-sm
-              transition-colors {entry.label === tab
-              ? 'bg-base-100 font-medium hairline'
+            data-tab={entry.label}
+            class="relative z-10 flex items-center gap-1.5 rounded-selector px-3
+              py-1 text-sm transition-colors {entry.label === tab
+              ? 'font-medium'
               : 'text-base-content/55 hover:text-base-content'}"
           >
             <Icon icon={entry.icon} class="size-3.5" />

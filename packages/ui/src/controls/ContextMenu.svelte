@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Icon } from "./icons"
+  import { scale } from "svelte/transition"
+
+  import { Icon } from "../icons"
+  import { pop } from "../motion"
 
   export type MenuItem = {
     label: string
@@ -42,7 +45,8 @@
 ></div>
 
 <menu
-  class="fixed z-70 w-52 rounded-box bg-base-100 p-1 lift"
+  transition:scale={pop()}
+  class="fixed z-70 w-52 rounded-box floating p-1 lift"
   style:left="{left}px"
   style:top="{top}px"
 >

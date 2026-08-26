@@ -1,13 +1,13 @@
 <script lang="ts">
-  import Dropdown from "./Dropdown.svelte"
-  import Field from "./Field.svelte"
-  import { Icon } from "./icons"
+  import Dropdown from "../controls/Dropdown.svelte"
+  import Field from "../controls/Field.svelte"
+  import { Icon } from "../icons"
   import type {
     BackendInfo,
     CredentialPreset,
     Probe,
     SessionDraft,
-  } from "./types"
+  } from "../types"
 
   type Props = {
     draft: SessionDraft
@@ -18,6 +18,7 @@
     readOnly?: boolean
     busy?: boolean
     onconnect?: () => void
+    onkeep?: () => void
     ontoggleReadOnly?: () => void
     onbrowse?: () => void
     labels?: Partial<Record<
@@ -27,6 +28,7 @@
       | "readOnly"
       | "readOnlyHint"
       | "connect"
+      | "save"
       | "keys"
       | "browse"
       | "tlsAuto"
@@ -46,6 +48,7 @@
     readOnly = true,
     busy = false,
     onconnect,
+    onkeep,
     ontoggleReadOnly,
     onbrowse,
     labels = {},
@@ -58,6 +61,7 @@
     readOnly: labels.readOnly ?? "Read only",
     readOnlyHint: labels.readOnlyHint ?? "the server refuses every write",
     connect: labels.connect ?? "Connect",
+    save: labels.save ?? "Save",
     keys: labels.keys ?? "tab moves, return connects",
     browse: labels.browse ?? "Browse",
     tlsAuto: labels.tlsAuto ?? "Automatic",
@@ -289,15 +293,28 @@
     />
   </div>
 
-  <button
-    type="button"
-    onclick={() => onconnect?.()}
-    disabled={busy}
-    class="btn btn-primary btn-sm h-9 w-full rounded-field border-0 font-normal
-      shadow-none"
-  >
-    {words.connect}
-  </button>
+  <div class="flex gap-2">
+    {#if onkeep}
+      <button
+        type="button"
+        onclick={() => onkeep?.()}
+        class="btn btn-sm h-9 flex-1 rounded-field border-0 bg-base-200
+          font-normal shadow-none hover:bg-base-300"
+      >
+        {words.save}
+      </button>
+    {/if}
+
+    <button
+      type="button"
+      onclick={() => onconnect?.()}
+      disabled={busy}
+      class="btn btn-primary btn-sm h-9 flex-1 rounded-field border-0
+        font-normal shadow-none"
+    >
+      {words.connect}
+    </button>
+  </div>
 
   <p class="px-1 text-xs text-base-content/40">{words.keys}</p>
 </div>
