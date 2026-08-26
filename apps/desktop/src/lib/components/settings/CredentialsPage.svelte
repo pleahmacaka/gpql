@@ -221,6 +221,4 @@
       </p>
     {/each}
   </div>
-
-  <p class="px-1 pt-2 text-xs text-base-content/35">{m.sealed_here()}</p>
 </section>
