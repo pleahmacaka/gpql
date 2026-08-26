@@ -8,7 +8,7 @@
   <title>Download GPQL</title>
 </svelte:head>
 
-<div class="mx-auto max-w-lg px-6 py-16">
+<div class="mx-auto max-w-lg px-4 py-12 sm:px-6 sm:py-16">
   <a href="/" class="flex items-center gap-2 font-display text-base font-medium">
     <Logo class="size-5" />
     GPQL

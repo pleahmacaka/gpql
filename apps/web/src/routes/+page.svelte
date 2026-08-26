@@ -32,8 +32,8 @@
     class="pointer-events-none absolute inset-x-0 top-0 h-192 grain"
   ></div>
 
-  <div class="relative mx-auto max-w-5xl px-6 pb-24">
-    <div class="sticky top-0 z-40 -mx-6 px-6 pt-2 pb-3">
+  <div class="relative mx-auto max-w-5xl px-4 pb-24 sm:px-6">
+    <div class="sticky top-0 z-40 -mx-4 px-4 pt-2 pb-3 sm:-mx-6 sm:px-6">
       <nav
         class="flex items-center gap-1 rounded-box bg-base-100/80 p-1.5 pl-3
           text-sm backdrop-blur-lg lift"
@@ -50,8 +50,9 @@
         {#each [{ href: "#engines", label: "Databases" }, { href: "#screens", label: "Screens" }, { href: "#sync", label: "Sync" }] as link (link.href)}
           <a
             href={link.href}
-            class="rounded-field px-3 py-1.5 text-base-content/60
-              transition-colors hover:bg-base-200 hover:text-base-content"
+            class="hidden rounded-field px-3 py-1.5 text-base-content/60
+              transition-colors hover:bg-base-200 hover:text-base-content
+              sm:block"
           >
             {link.label}
           </a>
@@ -77,14 +78,18 @@
       </nav>
     </div>
 
-    <header class="grid items-center gap-10 pt-8 pb-14 lg:grid-cols-2">
+    <header
+      class="grid items-center gap-8 pt-6 pb-12 sm:gap-10 sm:pt-8 sm:pb-14
+        lg:grid-cols-2"
+    >
       <div data-reveal use:reveal>
         <p class="font-mono text-xs text-base-content/45">
           fourteen databases, one window, none of them ours
         </p>
 
         <h1
-          class="pt-4 font-display text-5xl leading-tight font-bold tracking-tight"
+          class="pt-4 font-display text-4xl leading-tight font-bold tracking-tight
+            sm:text-5xl"
         >
           Open the database.<br />
           Read the rows.<br />
@@ -112,22 +117,28 @@
           </a>
         </div>
 
-        <div class="flex gap-4 pt-5 font-mono text-xs text-base-content/40">
+        <div
+          class="flex flex-wrap gap-x-4 gap-y-1 pt-5 font-mono text-xs
+            text-base-content/40"
+        >
           <span>tab moves</span>
           <span>GPQL checks as you type</span>
           <span>return connects</span>
         </div>
       </div>
 
-      <div class="relative" data-reveal use:reveal>
+      <div class="relative min-w-0" data-reveal use:reveal>
         <div
           aria-hidden="true"
-          class="absolute -inset-6 rounded-box bg-primary/10 blur-3xl"
+          class="absolute -inset-4 rounded-box bg-primary/10 blur-3xl
+            sm:-inset-6"
         ></div>
 
         <DemoWindow chip="no session" chipIcon="lucide:plus">
-          <div class="bg-base-200 px-8 py-6">
-            <section class="mx-auto w-96 rounded-box bg-base-100 p-4 lift">
+          <div class="bg-base-200 px-4 py-6 sm:px-8">
+            <section
+              class="w-96 max-w-full rounded-box bg-base-100 p-4 lift sm:mx-auto"
+            >
               <h2 class="mb-3 text-sm font-medium">New session</h2>
 
               <SessionCard
@@ -158,7 +169,9 @@
     <section id="engines" class="pt-10" data-reveal use:reveal>
       <p class="font-mono text-xs text-base-content/45">drivers</p>
 
-      <h2 class="pt-3 font-display text-3xl font-bold tracking-tight">
+      <h2
+        class="pt-3 font-display text-2xl font-bold tracking-tight sm:text-3xl"
+      >
         Every database speaks for itself.
       </h2>
 
@@ -195,11 +208,13 @@
 
     <div class="mt-16 h-px rule"></div>
 
-    <section id="screens" class="pt-16">
+    <section id="screens" class="pt-12 sm:pt-16">
       <div data-reveal use:reveal>
         <p class="font-mono text-xs text-base-content/45">read</p>
 
-        <h2 class="pt-3 font-display text-3xl font-bold tracking-tight">
+        <h2
+        class="pt-3 font-display text-2xl font-bold tracking-tight sm:text-3xl"
+      >
           Three screens. No fourth one.
         </h2>
       </div>
@@ -216,8 +231,8 @@
           </div>
 
           <div
-            class="rounded-box bg-linear-to-b from-base-100 to-base-200 p-3
-              ring-1 ring-base-content/5"
+            class="rounded-box bg-linear-to-b from-base-100 to-base-200 p-2
+              ring-1 ring-base-content/5 sm:p-3"
           >
             <DemoWindow chip="roomy" tab="Data">
             <div class="flex h-96 gap-2 bg-base-200 p-2">
@@ -292,8 +307,8 @@
           </div>
 
           <div
-            class="rounded-box bg-linear-to-b from-base-100 to-base-200 p-3
-              ring-1 ring-base-content/5"
+            class="rounded-box bg-linear-to-b from-base-100 to-base-200 p-2
+              ring-1 ring-base-content/5 sm:p-3"
           >
             <DemoWindow chip="roomy" tab="Query">
             <div class="h-96 bg-base-200 p-2">
@@ -346,8 +361,8 @@
           </div>
 
           <div
-            class="rounded-box bg-linear-to-b from-base-100 to-base-200 p-3
-              ring-1 ring-base-content/5"
+            class="rounded-box bg-linear-to-b from-base-100 to-base-200 p-2
+              ring-1 ring-base-content/5 sm:p-3"
           >
             <DemoWindow chip="roomy" tab="Schema">
             <div class="h-96 bg-base-200 p-2">
@@ -363,9 +378,9 @@
       </div>
     </section>
 
-    <section class="mt-20 grid gap-4 sm:grid-cols-3" data-reveal use:reveal>
+    <section class="mt-16 grid gap-4 sm:mt-20 sm:grid-cols-3" data-reveal use:reveal>
       {#each [{ icon: "lucide:lock", title: "Read only is the default", text: "GPQL asks the server to refuse every write before it runs a statement. Turning it off is one toggle, and the toggle says so out loud." }, { icon: "lucide:shield", title: "Keys stay on the machine", text: "Windows seals saved logins with DPAPI. Elsewhere the file is plaintext in your home folder, and the readme says exactly that." }, { icon: "lucide:git-fork", title: "Diagrams without a server", text: "Draw an ERD offline. Publish it only when you want someone else in the room." }] as card (card.title)}
-        <article class="rounded-box bg-base-100 p-6 lift">
+        <article class="rounded-box bg-base-100 p-5 lift sm:p-6">
           <Icon icon={card.icon} class="size-5 text-accent" />
 
           <h3 class="pt-3 font-display text-lg font-medium">{card.title}</h3>
@@ -375,11 +390,13 @@
       {/each}
     </section>
 
-    <section id="sync" class="grid gap-8 pt-20 lg:grid-cols-2">
+    <section id="sync" class="grid gap-8 pt-16 sm:pt-20 lg:grid-cols-2">
       <div data-reveal use:reveal>
         <p class="font-mono text-xs text-base-content/45">sync</p>
 
-        <h2 class="pt-3 font-display text-3xl font-bold tracking-tight">
+        <h2
+        class="pt-3 font-display text-2xl font-bold tracking-tight sm:text-3xl"
+      >
           An account is only for carrying settings across machines.
         </h2>
 
@@ -403,10 +420,10 @@
         </ul>
       </div>
 
-      <div class="rounded-box bg-base-100 p-6 lift" data-reveal use:reveal>
+      <div class="rounded-box bg-base-100 p-5 lift sm:p-6" data-reveal use:reveal>
         <p class="text-sm text-base-content/45">Sync</p>
 
-        <p class="pt-2 font-display text-4xl font-bold tracking-tight">
+        <p class="pt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl">
           Free, with an account
         </p>
 
@@ -430,8 +447,8 @@
     </section>
 
     <footer
-      class="mt-20 flex flex-wrap items-center gap-6 border-t
-        border-base-content/8 pt-8 text-xs text-base-content/40"
+      class="mt-16 flex flex-wrap items-center gap-x-6 gap-y-3 border-t
+        border-base-content/8 pt-8 text-xs text-base-content/40 sm:mt-20"
     >
       <span class="flex items-center gap-2 text-base-content/55">
         <Logo class="size-4" />
@@ -447,7 +464,7 @@
         Source
       </a>
 
-      <span class="ml-auto">local first, your rows stay yours</span>
+      <span class="w-full sm:ml-auto sm:w-auto">local first, your rows stay yours</span>
     </footer>
   </div>
 </div>

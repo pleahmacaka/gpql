@@ -13,8 +13,10 @@
     $props()
 </script>
 
-<figure class="overflow-hidden rounded-box bg-base-200 lift">
-  <WindowChrome {chip} {chipIcon} {tab} />
+<figure class="overflow-x-auto rounded-box bg-base-200 lift">
+  <div class="min-w-160">
+    <WindowChrome {chip} {chipIcon} {tab} />
 
-  {@render children()}
+    {@render children()}
+  </div>
 </figure>

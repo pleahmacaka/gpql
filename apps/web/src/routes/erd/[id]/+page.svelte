@@ -18,7 +18,7 @@
 </svelte:head>
 
 <div class="flex h-screen flex-col">
-  <header class="flex items-center gap-3 px-6 py-3">
+  <header class="flex items-center gap-3 px-4 py-3 sm:px-6">
     <a href="/" class="font-display text-base font-medium">GPQL</a>
 
     <span class="text-sm text-base-content/45">{data.room.name}</span>
@@ -31,7 +31,7 @@
     </span>
   </header>
 
-  <div class="min-h-0 flex-1 px-6 pb-6">
+  <div class="min-h-0 flex-1 px-4 pb-4 sm:px-6 sm:pb-6">
     <div class="h-full overflow-hidden rounded-box bg-base-100 lift">
       <SvelteFlowProvider>
         <SchemaBoard tables={data.room.tables} {room} />
