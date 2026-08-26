@@ -1,0 +1,69 @@
+name: warm
+
+# caches made on a tag ref are invisible to the next tag, so the default branch
+# builds once and every release restores from here
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/desktop/src-tauri/**"
+      - "bun.lock"
+      - ".github/workflows/warm.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: warm
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: cache bun modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+            apps/desktop/node_modules
+            apps/web/node_modules
+            packages/ui/node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: cache the built frontend
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/desktop/.svelte-kit
+            apps/desktop/node_modules/.vite
+          key: vite-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/desktop/vite.config.ts') }}-${{ hashFiles('apps/desktop/src/**', 'packages/ui/src/**') }}
+          restore-keys: |
+            vite-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/desktop/vite.config.ts') }}-
+            vite-${{ runner.os }}-
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: cache cargo and the rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          cache-all-crates: true
+          cache-on-failure: true
+
+      - name: build the frontend
+        run: bun run --filter desktop build
+
+      - name: build the rust side
+        working-directory: apps/desktop/src-tauri
+        run: cargo build --release
