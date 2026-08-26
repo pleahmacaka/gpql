@@ -4,7 +4,9 @@ import postgres from "postgres"
 import * as schema from "./schema"
 
 if (!process.env.DATABASE_URL) {
-  process.loadEnvFile?.()
+  try {
+    process.loadEnvFile?.()
+  } catch {}
 }
 
 const url = process.env.DATABASE_URL
