@@ -1,4 +1,4 @@
-import { error, json } from "@sveltejs/kit"
+import { json } from "@sveltejs/kit"
 import { eq } from "drizzle-orm"
 import { auth } from "$lib/server/auth"
 import { db } from "$lib/server/db"
@@ -42,7 +42,10 @@ export const POST: RequestHandler = async ({ request }) => {
   const session = await auth.api.getSession({ headers: request.headers })
 
   if (!session) {
-    throw error(401, "sign in first, then put the token in ~/.gpql-account")
+    return json(
+      { message: "sign in first" },
+      { status: 401, headers: allow(request) },
+    )
   }
 
   const userId = session.user.id
@@ -76,6 +79,7 @@ export const POST: RequestHandler = async ({ request }) => {
         .onConflictDoUpdate({
           target: syncQuery.id,
           set: { name: row.name, sql: row.sql, savedAt: row.savedAt },
+          setWhere: eq(syncQuery.userId, userId),
         })
     }
   })
@@ -115,7 +119,10 @@ export const DELETE: RequestHandler = async ({ request }) => {
   const session = await auth.api.getSession({ headers: request.headers })
 
   if (!session) {
-    throw error(401, "sign in first")
+    return json(
+      { message: "sign in first" },
+      { status: 401, headers: allow(request) },
+    )
   }
 
   const userId = session.user.id
