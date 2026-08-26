@@ -1,16 +1,15 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { Icon } from "@gpql/ui"
+  import { fade, scale } from "svelte/transition"
+
+  import { Icon, pop, veil } from "@gpql/ui"
   import { workspace } from "$lib/session/workspace.svelte"
 
-  import AppearanceSection from "./AppearanceSection.svelte"
-  import ConnectionsSection from "./ConnectionsSection.svelte"
-  import CredentialsSection from "./CredentialsSection.svelte"
-  import EditorSection from "./EditorSection.svelte"
-  import LoginsSection from "./LoginsSection.svelte"
-  import ProvidersSection from "./ProvidersSection.svelte"
-  import SyncSection from "./SyncSection.svelte"
+  import AppearancePage from "./AppearancePage.svelte"
+  import AccountPage from "./AccountPage.svelte"
+  import CredentialsPage from "./CredentialsPage.svelte"
+  import ModelsPage from "./ModelsPage.svelte"
 
   type Props = { onclose: () => void }
 
@@ -18,32 +17,38 @@
 
   const pages = [
     { id: "look", label: m.settings_appearance(), icon: "lucide:sun-moon" },
-    { id: "connections", label: m.settings_connections(), icon: "lucide:radar" },
-    { id: "credentials", label: m.settings_credentials(), icon: "lucide:key-round" },
-    { id: "logins", label: m.settings_logins(), icon: "lucide:lock" },
-    { id: "editor", label: m.settings_editor(), icon: "lucide:terminal" },
+    { id: "account", label: m.settings_account(), icon: "lucide:user-round" },
+    {
+      id: "credentials",
+      label: m.settings_credentials(),
+      icon: "lucide:key-round",
+    },
     { id: "models", label: m.settings_models(), icon: "lucide:sparkles" },
-    { id: "sync", label: m.settings_sync(), icon: "lucide:refresh-cw" },
   ]
 
   let page = $state("look")
 </script>
 
 <div
+  transition:fade={veil()}
   class="fixed inset-0 z-50 scrim"
   role="presentation"
   onclick={onclose}
 ></div>
 
 <div
-  class="fixed inset-x-0 top-12 bottom-12 z-50 mx-auto flex w-2xl max-w-11/12
-    overflow-hidden rounded-box bg-base-100 lift"
+  transition:scale={pop()}
+  class="fixed inset-x-0 top-16 z-50 mx-auto flex h-fit max-h-3/4 w-2xl
+    max-w-11/12 overflow-hidden rounded-box floating lift"
   role="dialog"
   aria-label="Settings"
   tabindex="-1"
 >
-  <nav class="flex w-44 shrink-0 flex-col gap-0.5 bg-base-200/60 p-2">
-    <p class="px-2 pt-1 pb-2 text-xs text-base-content/45">{m.settings()}</p>
+  <nav
+    class="flex w-44 shrink-0 flex-col gap-0.5 border-r border-base-content/10
+      bg-base-200 p-3"
+  >
+    <p class="px-2 pt-2 pb-3 text-xs text-base-content/45">{m.settings()}</p>
 
     {#each pages as entry (entry.id)}
       <button
@@ -52,23 +57,20 @@
         aria-pressed={page === entry.id}
         class="flex items-center gap-2 rounded-field px-2 py-1.5 text-left text-sm
           transition-colors {page === entry.id
-          ? 'bg-primary/10 text-primary'
-          : 'text-base-content/70 hover:bg-base-300/60'}"
+          ? 'bg-base-100 text-primary hairline'
+          : 'text-base-content/70 hover:bg-base-300'}"
       >
         <Icon icon={entry.icon} class="size-3.5 shrink-0" />
         {entry.label}
       </button>
     {/each}
 
-    <span class="flex-1"></span>
-
-    <p class="truncate px-2 pb-1 text-xs text-base-content/35">
-      {workspace.session?.label ?? m.no_session()}
-    </p>
   </nav>
 
-  <section class="flex min-w-0 flex-1 flex-col">
-    <header class="flex items-center px-5 py-3">
+  <section class="flex min-w-0 flex-1 flex-col bg-base-100">
+    <header
+      class="flex items-center border-b border-base-content/10 px-5 py-4"
+    >
       <h2 class="flex-1 text-sm font-medium">
         {pages.find(entry => entry.id === page)?.label}
       </h2>
@@ -83,21 +85,15 @@
       </button>
     </header>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+    <div class="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-6">
       {#if page === "look"}
-        <AppearanceSection />
-      {:else if page === "connections"}
-        <ConnectionsSection />
+        <AppearancePage />
       {:else if page === "credentials"}
-        <CredentialsSection />
-      {:else if page === "logins"}
-        <LoginsSection />
-      {:else if page === "editor"}
-        <EditorSection />
+        <CredentialsPage />
       {:else if page === "models"}
-        <ProvidersSection />
+        <ModelsPage />
       {:else}
-        <SyncSection />
+        <AccountPage />
       {/if}
     </div>
   </section>

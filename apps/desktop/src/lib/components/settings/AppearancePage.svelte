@@ -1,8 +1,8 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
-  import { getLocale, locales, setLocale } from "$lib/paraglide/runtime"
+  import { locales } from "$lib/paraglide/runtime"
 
-  import { Dropdown, OptionRow as OptionRow } from "@gpql/ui"
+  import { Dropdown, Icon, OptionRow as OptionRow } from "@gpql/ui"
   import { type Scheme, schemes, workspace } from "$lib/session/workspace.svelte"
 
   const label = (scheme: Scheme) =>
@@ -29,8 +29,8 @@
 
   <Dropdown
     options={languages}
-    value={getLocale()}
-    onpick={next => setLocale(next as "en" | "ko")}
+    value={workspace.locale}
+    onpick={next => workspace.speak(next as "en" | "ko")}
   />
 </div>
 
@@ -54,11 +54,45 @@
   />
 
   <OptionRow
+    icon="lucide:map"
+    title={m.option_minimap()}
+    detail={m.option_minimap_hint()}
+    on={workspace.minimap}
+    onclick={() => workspace.toggle("minimap")}
+  />
+
+  <div class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-2.5">
+    <Icon icon="lucide:timer" class="size-4 text-base-content/40" />
+
+    <div class="flex-1">
+      <p class="text-sm">{m.write_window()}</p>
+      <p class="text-xs text-base-content/45">{m.write_window_hint()}</p>
+    </div>
+
+    <Dropdown
+      options={workspace.windows.map(minutes => ({
+        value: String(minutes),
+        label: minutes === 0 ? m.write_window_never() : m.minutes({ count: minutes }),
+      }))}
+      value={String(workspace.writeWindow)}
+      onpick={minutes => workspace.setWriteWindow(Number(minutes))}
+    />
+  </div>
+
+  <OptionRow
     icon="lucide:lock"
     title={m.read_only()}
     detail={m.option_read_only_hint()}
     on={workspace.readOnly}
     onclick={() => workspace.toggle("readOnly")}
+  />
+
+  <OptionRow
+    icon="lucide:wand-sparkles"
+    title={m.option_motion()}
+    detail={m.option_motion_hint()}
+    on={workspace.motion}
+    onclick={() => workspace.toggle("motion")}
   />
 
   <OptionRow
