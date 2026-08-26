@@ -316,5 +316,7 @@
     </button>
   </div>
 
-  <p class="px-1 text-xs text-base-content/40">{words.keys}</p>
+  {#if words.keys}
+    <p class="px-1 text-xs text-base-content/40">{words.keys}</p>
+  {/if}
 </div>

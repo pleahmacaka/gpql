@@ -14,7 +14,7 @@
 </script>
 
 <figure class="overflow-x-auto rounded-box bg-base-200 lift">
-  <div class="min-w-160">
+  <div class="min-w-96 sm:min-w-160 lg:min-w-0">
     <WindowChrome {chip} {chipIcon} {tab} />
 
     {@render children()}

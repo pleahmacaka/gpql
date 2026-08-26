@@ -10,6 +10,7 @@
   import { SvelteFlowProvider } from "@xyflow/svelte"
 
   import DemoWindow from "$lib/components/marketing/DemoWindow.svelte"
+  import Sql from "$lib/components/marketing/Sql.svelte"
   import * as sample from "$lib/components/marketing/sample"
   import { reveal } from "$lib/reveal"
 
@@ -18,7 +19,7 @@
   let dataView = $state<"table" | "chart">("table")
 
   const SUMMARY =
-    "GPQL is a SQL client that keeps everything on your disk. Fourteen databases, each through its own driver. Your logins are sealed by the OS, your queries never leave the machine, and read only is on until you turn it off."
+    "A SQL client that keeps everything on your disk. Fourteen databases, one window, read only until you say otherwise."
 </script>
 
 <svelte:head>
@@ -83,17 +84,13 @@
         lg:grid-cols-2"
     >
       <div data-reveal use:reveal>
-        <p class="font-mono text-xs text-base-content/45">
-          fourteen databases, one window, none of them ours
-        </p>
-
         <h1
           class="pt-4 font-display text-4xl leading-tight font-bold tracking-tight
             sm:text-5xl"
         >
-          Open the database.<br />
-          Read the rows.<br />
-          <span class="text-base-content/40">Close it.</span>
+          Open quickly.<br />
+          Just works.<br />
+          <span class="text-base-content/40">Keep it safe.</span>
         </h1>
 
         <p class="max-w-md pt-5 text-base-content/65">{SUMMARY}</p>
@@ -116,15 +113,6 @@
             See the drivers
           </a>
         </div>
-
-        <div
-          class="flex flex-wrap gap-x-4 gap-y-1 pt-5 font-mono text-xs
-            text-base-content/40"
-        >
-          <span>tab moves</span>
-          <span>GPQL checks as you type</span>
-          <span>return connects</span>
-        </div>
       </div>
 
       <div class="relative min-w-0" data-reveal use:reveal>
@@ -143,6 +131,7 @@
 
               <SessionCard
                 bind:draft
+                labels={{ keys: "" }}
                 backends={sample.backends}
                 probe={{ tone: "good", text: "PostgreSQL 18.4 answered in 6 ms" }}
                 {readOnly}
@@ -154,21 +143,7 @@
       </div>
     </header>
 
-    <div
-      class="flex flex-wrap gap-x-8 gap-y-2 pb-4 font-mono text-xs
-        text-base-content/45"
-      data-reveal
-      use:reveal
-    >
-      <span>14 drivers, each the vendor's own</span>
-      <span>3 screens</span>
-      <span>0 bytes of telemetry</span>
-      <span>read only until you say otherwise</span>
-    </div>
-
     <section id="engines" class="pt-10" data-reveal use:reveal>
-      <p class="font-mono text-xs text-base-content/45">drivers</p>
-
       <h2
         class="pt-3 font-display text-2xl font-bold tracking-tight sm:text-3xl"
       >
@@ -176,9 +151,8 @@
       </h2>
 
       <p class="max-w-2xl pt-4 text-base-content/65">
-        No wrapper protocol, no hand-rolled HTTP. Each backend goes through the
-        driver its own people maintain, so the wire behaviour is theirs and the
-        bugs are the ones you can look up.
+        Every backend goes through the driver its own people maintain. No
+        wrapper protocol, no hand-rolled HTTP.
       </p>
 
       <ul class="grid grid-cols-2 gap-2 pt-8 sm:grid-cols-3 lg:grid-cols-4">
@@ -199,22 +173,15 @@
           </li>
         {/each}
       </ul>
-
-      <p class="pt-4 font-mono text-xs text-base-content/40">
-        cloudflare d1 has no rust driver, so that one is the documented
-        exception: plain rest, said out loud in the readme
-      </p>
     </section>
 
     <div class="mt-16 h-px rule"></div>
 
     <section id="screens" class="pt-12 sm:pt-16">
       <div data-reveal use:reveal>
-        <p class="font-mono text-xs text-base-content/45">read</p>
-
         <h2
-        class="pt-3 font-display text-2xl font-bold tracking-tight sm:text-3xl"
-      >
+          class="pt-3 font-display text-2xl font-bold tracking-tight sm:text-3xl"
+        >
           Three screens. No fourth one.
         </h2>
       </div>
@@ -225,8 +192,8 @@
             <h3 class="font-display text-lg font-medium">Data</h3>
 
             <p class="text-sm text-base-content/55">
-              Rows and columns both virtualized, edits staged until you apply
-              them, and a minimap when the result runs off both edges.
+              Virtualized rows and columns, a minimap when the result runs
+              wide, and cell edits the moment you leave read only.
             </p>
           </div>
 
@@ -300,9 +267,9 @@
             <h3 class="font-display text-lg font-medium">Query</h3>
 
             <p class="text-sm text-base-content/55">
-              Highlighting per dialect from tree-sitter, completion from a real
-              language server, and an ask bar that turns a sentence into SQL
-              through your own key.
+              Tree-sitter highlighting per dialect, completion from a real
+              language server, a check before anything runs, and an ask bar
+              that writes the SQL with your own key.
             </p>
           </div>
 
@@ -325,16 +292,9 @@
                   <span class="flex-1 text-sm text-base-content/70">
                     {sample.ask[0].text}
                   </span>
-
-                  <span class="font-mono text-xs text-base-content/40">
-                    your key, your endpoint
-                  </span>
                 </div>
 
-                <pre
-                  class="flex-1 overflow-auto rounded-field bg-base-200 p-4
-                    font-mono text-xs leading-relaxed text-base-content/80">{sample
-                    .ask[1].text}</pre>
+                <Sql code={sample.ask[1].text} />
 
                 <p
                   class="flex items-center gap-1.5 font-mono text-xs
@@ -355,8 +315,7 @@
 
             <p class="text-sm text-base-content/55">
               Tables laid out by what they point at, walkable with the arrow
-              keys, and groupable by hand or by asking a model to read the
-              shape.
+              keys, and grouped by hand or, if you turn it on, by a model.
             </p>
           </div>
 
@@ -379,7 +338,7 @@
     </section>
 
     <section class="mt-16 grid gap-4 sm:mt-20 sm:grid-cols-3" data-reveal use:reveal>
-      {#each [{ icon: "lucide:lock", title: "Read only is the default", text: "GPQL asks the server to refuse every write before it runs a statement. Turning it off is one toggle, and the toggle says so out loud." }, { icon: "lucide:shield", title: "Keys stay on the machine", text: "Windows seals saved logins with DPAPI. Elsewhere the file is plaintext in your home folder, and the readme says exactly that." }, { icon: "lucide:git-fork", title: "Diagrams without a server", text: "Draw an ERD offline. Publish it only when you want someone else in the room." }] as card (card.title)}
+      {#each [{ icon: "lucide:lock", title: "Read only is the default", text: "The server is asked to refuse writes until you flip one toggle, and it flips back on its own." }, { icon: "lucide:shield", title: "Keys stay on the machine", text: "Windows seals saved logins with DPAPI. Elsewhere the file is plaintext, and the readme says so." }, { icon: "lucide:git-fork", title: "Diagrams without a server", text: "Draw an ERD offline. Publish it only when someone else needs the room." }] as card (card.title)}
         <article class="rounded-box bg-base-100 p-5 lift sm:p-6">
           <Icon icon={card.icon} class="size-5 text-accent" />
 
@@ -392,21 +351,19 @@
 
     <section id="sync" class="grid gap-8 pt-16 sm:pt-20 lg:grid-cols-2">
       <div data-reveal use:reveal>
-        <p class="font-mono text-xs text-base-content/45">sync</p>
-
-        <h2
+          <h2
         class="pt-3 font-display text-2xl font-bold tracking-tight sm:text-3xl"
       >
           An account is only for carrying settings across machines.
         </h2>
 
         <p class="pt-4 text-base-content/65">
-          GPQL works forever without one. Sign in when you want the same setup on
-          a second machine, sign out and the app keeps working exactly as it did.
+          GPQL works forever without one. Sign in when you want the same setup
+          on a second machine.
         </p>
 
         <ul class="space-y-2 pt-6">
-          {#each ["Settings: theme, density, read only", "Connections you have opened before", "Queries you kept", "ERD rooms, so a diagram can have two people in it"] as item (item)}
+          {#each ["Settings, theme and density", "Connections you have opened before", "Queries you kept", "ERD rooms, co-design with your team"] as item (item)}
             <li class="flex items-center gap-2 text-sm">
               <Icon icon="lucide:check" class="size-4 shrink-0 text-primary" />
               {item}
@@ -428,8 +385,8 @@
         </p>
 
         <p class="pt-3 text-sm text-base-content/65">
-          Sign in and every machine you sign in on lands on the same settings,
-          connections and saved queries. No plan, no card, no seat count.
+          Same settings, connections and saved queries on every machine. No
+          plan, no card, no seat count.
         </p>
 
         <a
