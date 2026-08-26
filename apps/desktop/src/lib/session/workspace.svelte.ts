@@ -730,7 +730,12 @@ export class Workspace {
     this.rows = null
     this.selected = null
     this.queryResult = null
+    this.queryError = null
     this.queryRan = false
+    this.openQuery = null
+    this.autosaved = false
+    this.finding = false
+    this.selection = { start: 0, end: 0 }
     this.mode = "recent"
   }
 
@@ -874,6 +879,7 @@ export class Workspace {
     }
 
     this.sql = entry.sql
+    this.selection = { start: 0, end: 0 }
     this.openQuery = entry.id
     this.autosaved = false
   }

@@ -828,6 +828,7 @@
                   })}
                 onkeydown={event => {
                   if (event.key === "Escape" || event.key === "Enter") {
+                    event.stopPropagation()
                     openFilter = null
                   }
                 }}
@@ -898,6 +899,7 @@
 
                 if (event.key === "Escape") {
                   event.preventDefault()
+                  event.stopPropagation()
                   editing = null
                   viewport?.focus()
                 }

@@ -38,9 +38,14 @@
   })
 
   $effect(() => {
+    term
+    hit = 0
+  })
+
+  $effect(() => {
     const names = hits
 
-    if (names.length === 0) {
+    if (!workspace.finding || names.length === 0) {
       return
     }
 

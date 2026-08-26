@@ -43,7 +43,10 @@
 
     if (event.key === "f" && event.ctrlKey) {
       event.preventDefault()
-      workspace.finding = true
+
+      if (workspace.session && !workspace.erd) {
+        workspace.finding = true
+      }
     }
 
     if (event.key === "j" && event.ctrlKey) {

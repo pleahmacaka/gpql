@@ -36,22 +36,31 @@
     return out
   })
 
+  // typing only updates the count; the editor is touched on explicit steps,
+  // otherwise reveal() would steal the focus on every keystroke
   $effect(() => {
-    const spots = hits
-
-    if (spots.length === 0) {
-      return
-    }
-
-    const at = spots[Math.min(hit, spots.length - 1)]
-
-    editor?.reveal(at, at + term.trim().length)
+    term
+    hit = 0
   })
+
+  function show() {
+    const at = hits[Math.min(hit, hits.length - 1)]
+
+    if (at !== undefined) {
+      editor?.reveal(at, at + term.trim().length)
+    }
+  }
 
   function step(by: number) {
     if (hits.length > 0) {
       hit = (hit + by + hits.length) % hits.length
+      show()
     }
+  }
+
+  function doneFinding() {
+    workspace.finding = false
+    workspace.selection = { start: 0, end: 0 }
   }
 
   let picked = $derived(workspace.selection.end > workspace.selection.start)
@@ -77,8 +86,10 @@
   $effect(() => {
     const text = workspace.sql
     const id = workspace.openQuery
+    const stored = workspace.saved.find(entry => entry.id === id)?.sql
 
-    if (!id || text.trim() === "") {
+    // just opening a query is not an edit
+    if (!id || text.trim() === "" || text === stored) {
       return
     }
 
@@ -116,7 +127,7 @@
           total={hits.length}
           onnext={() => step(1)}
           onprev={() => step(-1)}
-          onclose={() => (workspace.finding = false)}
+          onclose={doneFinding}
         />
       {/if}
 

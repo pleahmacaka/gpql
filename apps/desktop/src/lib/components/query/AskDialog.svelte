@@ -35,6 +35,10 @@
   }
 </script>
 
+<svelte:window
+  onkeydown={event => event.key === "Escape" && onclose()}
+/>
+
 <div
   transition:fade={veil()}
   class="fixed inset-0 z-50 scrim"

@@ -79,13 +79,21 @@
     return match
   }
 
-  async function suggest() {
+  async function suggest(forced = false) {
     if (!input) {
       return
     }
 
     const at = input.selectionStart
     const prefix = wordBefore(at)
+
+    // an empty prefix matches everything, which would put a completion list
+    // under every space and let plain enter swallow the newline
+    if (prefix === "" && !forced) {
+      hints = []
+
+      return
+    }
 
     const dialect = workspace.dialect
     const before = value.slice(0, at).split("\n")
@@ -164,7 +172,7 @@
   function keys(event: KeyboardEvent) {
     if (event.key === " " && event.ctrlKey) {
       event.preventDefault()
-      void suggest()
+      void suggest(true)
 
       return
     }
@@ -211,7 +219,7 @@
 
     if (event.key === " " && event.ctrlKey) {
       event.preventDefault()
-      suggest()
+      suggest(true)
     }
   }
 </script>
@@ -231,7 +239,7 @@
     bind:value
     onkeydown={keys}
     onkeyup={track}
-    oninput={suggest}
+    oninput={() => suggest()}
     onclick={track}
     onselect={track}
     onscroll={mirror}

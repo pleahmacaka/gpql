@@ -39,7 +39,14 @@
     return out
   })
 
-  let spot = $derived(hits[Math.min(hit, hits.length - 1)] ?? null)
+  let spot = $derived(
+    workspace.finding ? (hits[Math.min(hit, hits.length - 1)] ?? null) : null,
+  )
+
+  $effect(() => {
+    term
+    hit = 0
+  })
 
   function step(by: number) {
     if (hits.length > 0) {

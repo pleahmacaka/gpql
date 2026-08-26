@@ -190,6 +190,7 @@
     ungroup: m.group_drop(),
     warn: m.arrange_warn(),
     groupName: m.group_name(),
+    rest: m.group_rest(),
   }}
           onselect={name => (doc.selected = name)}
         />
