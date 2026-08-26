@@ -6,11 +6,24 @@
 
   let { data }: { data: PageData } = $props()
 
-  const start = (provider: "github") =>
-    authClient.signIn.social({
-      provider,
-      callbackURL: `/account${data.handoff}`,
-    })
+  let starting = $state(false)
+
+  const start = async (provider: "github") => {
+    if (starting) {
+      return
+    }
+
+    starting = true
+
+    try {
+      await authClient.signIn.social({
+        provider,
+        callbackURL: `/account${data.handoff}`,
+      })
+    } catch {
+      starting = false
+    }
+  }
 </script>
 
 <svelte:head>
@@ -36,11 +49,16 @@
       <button
         type="button"
         onclick={() => start("github")}
+        disabled={starting}
         class="flex w-full items-center justify-center gap-2 rounded-field
-          bg-neutral py-2.5 text-sm text-neutral-content hover:bg-neutral/90"
+          bg-neutral py-2.5 text-sm text-neutral-content hover:bg-neutral/90
+          disabled:opacity-60"
       >
-        <Icon icon="lucide:github" class="size-4" />
-        Continue with GitHub
+        <Icon
+          icon={starting ? "lucide:loader-circle" : "lucide:github"}
+          class="size-4 {starting ? 'animate-spin' : ''}"
+        />
+        {starting ? "Opening GitHub" : "Continue with GitHub"}
       </button>
     </div>
 
