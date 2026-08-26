@@ -77,10 +77,15 @@ async fn probe_recents(items: Vec<Waypoint>) -> Vec<String> {
         }
 
         if login.endpoint.is_empty() {
+            let fallback = crate::backends::find(&login.kind)
+                .map(|backend| backend.port)
+                .filter(|port| !port.is_empty())
+                .unwrap_or("5432");
+
             return address_of(&format!(
                 "{}:{}",
                 login.host,
-                if login.port.is_empty() { "5432" } else { &login.port }
+                if login.port.is_empty() { fallback } else { &login.port }
             ))
             .map(|(host, port)| Look::Port(host, port));
         }
@@ -169,7 +174,10 @@ async fn databases(config: SessionConfig) -> Result<Vec<String>, String> {
     let mut probing = config.clone();
 
     if probing.database.is_empty() {
-        probing.database = "postgres".into();
+        probing.database = match crate::backends::transport_of(&config.kind) {
+            Transport::MySql => "information_schema".into(),
+            _ => "postgres".into(),
+        };
     }
 
     probing.read_only = true;

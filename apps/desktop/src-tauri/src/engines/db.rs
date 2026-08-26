@@ -483,7 +483,66 @@ fn open_sqlite(config: &SessionConfig) -> Result<Session, String> {
     });
 }
 
+#[cfg(test)]
+mod refusing {
+    use super::reads_only;
+
+    #[test]
+    fn lets_reads_through() {
+        assert!(reads_only("select 1"));
+        assert!(reads_only("  SELECT * from t"));
+        assert!(reads_only("from(bucket: \"b\") |> range(start: 0)"));
+        assert!(reads_only("MATCH (n) RETURN n"));
+        assert!(reads_only("explain select 1"));
+        assert!(reads_only("show tables"));
+    }
+
+    #[test]
+    fn stops_writes() {
+        assert!(!reads_only("delete from t"));
+        assert!(!reads_only("  DROP TABLE t"));
+        assert!(!reads_only("insert into t values (1)"));
+        assert!(!reads_only("update t set a = 1"));
+        assert!(!reads_only("CREATE (n:Node)"));
+        assert!(!reads_only("merge into t"));
+    }
+}
+
+// the ui promises read only, so every engine refuses writes here, not just the
+// ones whose server can be asked to
+fn reads_only(sql: &str) -> bool {
+    // flux writes `from(bucket:)` with no space, so cut at the first
+    // non-letter instead of at whitespace
+    let head: String = sql
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_lowercase();
+
+    return matches!(
+        head.as_str(),
+        "select"
+            | "show"
+            | "describe"
+            | "desc"
+            | "explain"
+            | "with"
+            | "pragma"
+            | "from"
+            | "match"
+            | "return"
+            | "unwind"
+            | "values"
+            | "table"
+    );
+}
+
 pub async fn query(session: &Session, sql: &str) -> Result<QueryResult, String> {
+    if session.read_only.load(Ordering::Relaxed) && !reads_only(sql) {
+        return Err("this session is read only".into());
+    }
+
     match &session.engine {
         Engine::Postgres(client) => query_postgres(client, sql).await,
         Engine::Sqlite(connection) => query_sqlite(&connection.lock().unwrap(), sql),
