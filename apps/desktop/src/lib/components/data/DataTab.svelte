@@ -1,18 +1,40 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { Icon, ResultChart } from "@gpql/ui"
+  import { fade, scale } from "svelte/transition"
+
+  import { Icon, Lazy, pop, veil } from "@gpql/ui"
 
   import { workspace } from "$lib/session/workspace.svelte"
+
+  import TabLayout from "$lib/components/shell/TabLayout.svelte"
 
   import ResultGrid from "./ResultGrid.svelte"
   import TableList from "./TableList.svelte"
 
   let view = $state<"table" | "chart">("table")
+  let asking = $state(false)
+
+  function toggleWrites() {
+    if (workspace.readOnly) {
+      asking = true
+
+      return
+    }
+
+    workspace.toggle("readOnly")
+  }
+
+  async function allowWrites() {
+    asking = false
+    await workspace.toggle("readOnly")
+  }
 </script>
 
-<div class="flex h-full gap-2 p-2">
-  <TableList />
+<TabLayout>
+  {#snippet aside()}
+    <TableList />
+  {/snippet}
 
   <section class="flex min-w-0 flex-1 flex-col rounded-box bg-base-100 lift">
     <header class="flex items-baseline gap-2 px-4 pt-2 pb-1">
@@ -40,15 +62,88 @@
           </button>
         {/each}
       </div>
+
+      <button
+        type="button"
+        onclick={toggleWrites}
+        aria-pressed={!workspace.readOnly}
+        title={workspace.readOnly ? m.read_only() : m.writes_on()}
+        class="flex items-center gap-1.5 self-center rounded-selector px-2 py-1
+          text-xs transition-colors {workspace.readOnly
+          ? 'bg-base-200 text-base-content/55 hover:bg-base-300'
+          : 'bg-warning/15 text-warning'}"
+      >
+        <Icon
+          icon={workspace.readOnly ? "lucide:lock" : "lucide:pencil"}
+          class="size-3.5"
+        />
+        {workspace.readOnly ? m.read_only() : m.writes_on()}
+      </button>
     </header>
 
     {#if view === "chart" && workspace.rows}
-      <ResultChart
-        columns={workspace.rows.columns}
-        rows={workspace.rows.rows}
+      <Lazy
+        load={() => import("@gpql/ui/data/ResultChart.svelte")}
+        props={{
+          columns: workspace.rows.columns,
+          rows: workspace.rows.rows,
+        }}
       />
     {:else}
-      <ResultGrid result={workspace.rows} empty={m.pick_table()} />
+      <ResultGrid
+        result={workspace.rows}
+        empty={workspace.selected ? m.no_rows() : m.pick_table()}
+        editable
+        onblocked={() => (asking = true)}
+      />
     {/if}
   </section>
-</div>
+</TabLayout>
+
+{#if asking}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    transition:fade={veil()}
+    onclick={() => (asking = false)}
+    class="fixed inset-0 z-50 scrim"
+  ></div>
+
+  <div
+    transition:scale={pop()}
+    role="dialog"
+    aria-modal="true"
+    class="fixed inset-x-0 top-1/3 z-50 mx-auto w-96 max-w-11/12 rounded-box
+      floating p-5 lift"
+  >
+    <div class="flex items-start gap-3">
+      <Icon icon="lucide:pencil" class="mt-0.5 size-4 shrink-0 text-warning" />
+
+      <div>
+        <h2 class="text-sm font-medium">{m.writes_ask()}</h2>
+
+        <p class="pt-1 text-xs text-base-content/60">{m.writes_ask_hint()}</p>
+      </div>
+    </div>
+
+    <div class="flex gap-2 pt-5">
+      <button
+        type="button"
+        onclick={() => (asking = false)}
+        class="flex-1 rounded-field bg-base-200 py-1.5 text-sm
+          hover:bg-base-300"
+      >
+        {m.cancel()}
+      </button>
+
+      <button
+        type="button"
+        onclick={allowWrites}
+        class="flex-1 rounded-field bg-warning py-1.5 text-sm
+          text-warning-content"
+      >
+        {m.writes_allow()}
+      </button>
+    </div>
+  </div>
+{/if}
