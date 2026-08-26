@@ -1,4 +1,6 @@
-import { integer, pgTable, primaryKey, text } from "drizzle-orm/pg-core"
+import { integer, primaryKey, text } from "drizzle-orm/pg-core"
+
+import { gpql } from "./area"
 
 import { user } from "./auth-schema"
 
@@ -7,7 +9,7 @@ const owner = () =>
     .notNull()
     .references(() => user.id, { onDelete: "cascade" })
 
-export const syncPreference = pgTable(
+export const syncPreference = gpql.table(
   "sync_preference",
   {
     userId: owner(),
@@ -17,7 +19,7 @@ export const syncPreference = pgTable(
   table => [primaryKey({ columns: [table.userId, table.key] })],
 )
 
-export const syncRecent = pgTable(
+export const syncRecent = gpql.table(
   "sync_recent",
   {
     userId: owner(),
@@ -30,7 +32,7 @@ export const syncRecent = pgTable(
   table => [primaryKey({ columns: [table.userId, table.url] })],
 )
 
-export const syncQuery = pgTable("sync_query", {
+export const syncQuery = gpql.table("sync_query", {
   id: text("id").primaryKey(),
   userId: owner(),
   name: text("name").notNull(),
@@ -39,7 +41,7 @@ export const syncQuery = pgTable("sync_query", {
   savedAt: integer("saved_at").notNull(),
 })
 
-export const erdRoom = pgTable("erd_room", {
+export const erdRoom = gpql.table("erd_room", {
   id: text("id").primaryKey(),
   userId: owner(),
   name: text("name").notNull(),

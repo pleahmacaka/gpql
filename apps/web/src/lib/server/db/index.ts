@@ -13,4 +13,5 @@ if (!url) {
   throw new Error("DATABASE_URL is not set")
 }
 
-export const db = drizzle(postgres(url), { schema })
+// the pooler hands out a different session per statement, so no prepares
+export const db = drizzle(postgres(url, { prepare: false }), { schema })
