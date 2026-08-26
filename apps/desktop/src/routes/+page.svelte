@@ -38,6 +38,12 @@
       menuOpen = false
       settingsOpen = false
       paletteOpen = false
+      workspace.finding = false
+    }
+
+    if (event.key === "f" && event.ctrlKey) {
+      event.preventDefault()
+      workspace.finding = true
     }
 
     if (event.key === "j" && event.ctrlKey) {

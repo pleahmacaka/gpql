@@ -9,10 +9,17 @@
     result: QueryResult | null
     empty: string
     editable?: boolean
+    spot?: { row: number; column: number } | null
     onblocked?: () => void
   }
 
-  let { result, empty, editable = false, onblocked }: Props = $props()
+  let {
+    result,
+    empty,
+    editable = false,
+    spot = null,
+    onblocked,
+  }: Props = $props()
 </script>
 
 {#if !result || result.columns.length === 0}
@@ -28,6 +35,7 @@
     keyColumns={editable ? workspace.keyColumns : []}
     busy={workspace.busy}
     minimap={workspace.minimap}
+    {spot}
     onapply={edits => workspace.applyEdits(edits)}
     {onblocked}
     labels={{

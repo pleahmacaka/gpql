@@ -22,6 +22,7 @@
     keyColumns?: string[]
     busy?: boolean
     minimap?: boolean
+    spot?: { row: number; column: number } | null
     onapply?: (edits: CellEdit[]) => Promise<void> | void
     onblocked?: () => void
     labels?: Partial<
@@ -52,6 +53,7 @@
     keyColumns = [],
     busy = false,
     minimap = true,
+    spot = null,
     onapply,
     onblocked,
     labels = {},
@@ -454,6 +456,17 @@
     filters = next
     openFilter = null
   }
+
+  // a find hit outside the grid still has to bring the cell into view
+  $effect(() => {
+    const target = spot
+
+    if (!target) {
+      return
+    }
+
+    untrack(() => focusCell(target.row, target.column))
+  })
 
   function focusCell(row: number, column: number) {
     const bounded = {

@@ -7,6 +7,7 @@
 
   import { workspace } from "$lib/session/workspace.svelte"
 
+  import FindBar from "$lib/components/shell/FindBar.svelte"
   import TabLayout from "$lib/components/shell/TabLayout.svelte"
 
   import ResultGrid from "./ResultGrid.svelte"
@@ -14,6 +15,37 @@
 
   let view = $state<"table" | "chart">("table")
   let asking = $state(false)
+  let term = $state("")
+  let hit = $state(0)
+
+  let hits = $derived.by(() => {
+    const needle = term.trim().toLowerCase()
+    const result = workspace.rows
+
+    if (needle === "" || !result) {
+      return []
+    }
+
+    const out: { row: number; column: number }[] = []
+
+    result.rows.forEach((row, y) => {
+      row.forEach((cell, x) => {
+        if ((cell ?? "").toLowerCase().includes(needle)) {
+          out.push({ row: y, column: x })
+        }
+      })
+    })
+
+    return out
+  })
+
+  let spot = $derived(hits[Math.min(hit, hits.length - 1)] ?? null)
+
+  function step(by: number) {
+    if (hits.length > 0) {
+      hit = (hit + by + hits.length) % hits.length
+    }
+  }
 
   function toggleWrites() {
     if (workspace.readOnly) {
@@ -37,7 +69,7 @@
   {/snippet}
 
   <section class="flex min-w-0 flex-1 flex-col rounded-box bg-base-100 lift">
-    <header class="flex items-baseline gap-2 px-4 pt-2 pb-1">
+    <header class="flex items-center gap-2 px-4 pt-2 pb-1">
       <h2 class="text-sm font-medium">{workspace.selected ?? m.no_table()}</h2>
 
       <span class="text-xs text-base-content/45">
@@ -45,6 +77,18 @@
       </span>
 
       <span class="flex-1"></span>
+
+      {#if workspace.finding}
+        <FindBar
+          placeholder={m.find_rows()}
+          bind:term
+          index={hit}
+          total={hits.length}
+          onnext={() => step(1)}
+          onprev={() => step(-1)}
+          onclose={() => (workspace.finding = false)}
+        />
+      {/if}
 
       <div class="flex gap-1 self-center rounded-selector bg-base-200 p-0.5">
         {#each [{ id: "table", icon: "lucide:table-2" }, { id: "chart", icon: "lucide:bar-chart-3" }] as option (option.id)}
@@ -93,6 +137,7 @@
       <ResultGrid
         result={workspace.rows}
         empty={workspace.selected ? m.no_rows() : m.pick_table()}
+        {spot}
         editable
         onblocked={() => (asking = true)}
       />
