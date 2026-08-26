@@ -109,6 +109,9 @@ export class Workspace {
 
   recents = $state<(typeof recent.$inferSelect)[]>([])
   saved = $state<(typeof savedQuery.$inferSelect)[]>([])
+  openQuery = $state<string | null>(null)
+  autosaved = $state(false)
+  finding = $state(false)
 
   found = $state<Discovery[]>([])
   scanning = $state(false)
@@ -519,7 +522,7 @@ export class Workspace {
 
       const { writeSql } = await import("$lib/ai/sql")
 
-      this.sql = await writeSql(provider, prompt, this.schema)
+      this.sql = await writeSql(provider, prompt, this.schema, this.sql)
       this.selection = { start: 0, end: 0 }
     } catch (failure) {
       this.queryError = friendly(String(failure))
@@ -859,6 +862,20 @@ export class Workspace {
     this.queryResult = null
     this.queryError = null
     this.queryRan = false
+    this.openQuery = null
+    this.autosaved = false
+  }
+
+  loadSaved(id: string) {
+    const entry = this.saved.find(row => row.id === id)
+
+    if (!entry) {
+      return
+    }
+
+    this.sql = entry.sql
+    this.openQuery = entry.id
+    this.autosaved = false
   }
 
   async keep() {
@@ -866,19 +883,37 @@ export class Workspace {
       return
     }
 
-    await local.insert(savedQuery).values({
-      id: crypto.randomUUID(),
-      name: firstLine(this.sql),
-      sql: this.sql,
-      target: this.session?.label ?? "",
-      savedAt: Math.floor(Date.now() / 1000),
-    })
+    const now = Math.floor(Date.now() / 1000)
+
+    if (this.openQuery) {
+      await local
+        .update(savedQuery)
+        .set({ name: firstLine(this.sql), sql: this.sql, savedAt: now })
+        .where(eq(savedQuery.id, this.openQuery))
+    } else {
+      const id = crypto.randomUUID()
+
+      await local.insert(savedQuery).values({
+        id,
+        name: firstLine(this.sql),
+        sql: this.sql,
+        target: this.session?.label ?? "",
+        savedAt: now,
+      })
+
+      this.openQuery = id
+    }
 
     await this.reloadSaved()
   }
 
   async drop(id: string) {
     await local.delete(savedQuery).where(eq(savedQuery.id, id))
+
+    if (this.openQuery === id) {
+      this.openQuery = null
+    }
+
     await this.reloadSaved()
   }
 

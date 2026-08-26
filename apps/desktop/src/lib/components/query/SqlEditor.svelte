@@ -143,6 +143,17 @@
     selection = { start: input.selectionStart, end: input.selectionEnd }
   }
 
+  // a jump made outside the editor, a find hit for instance, has to land here
+  export function reveal(start: number, end: number) {
+    if (!input) {
+      return
+    }
+
+    input.focus()
+    input.setSelectionRange(start, end)
+    track()
+  }
+
   function mirror() {
     if (input && painted) {
       painted.scrollTop = input.scrollTop

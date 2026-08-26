@@ -20,15 +20,13 @@
         {
           label: m.tab_query(),
           icon: "lucide:terminal",
-          run: () => {
-            workspace.sql = sql
-          },
+          run: () => workspace.loadSaved(id),
         },
         {
           label: m.menu_run(),
           icon: "lucide:play",
           run: async () => {
-            workspace.sql = sql
+            workspace.loadSaved(id)
             await workspace.run()
           },
         },
@@ -72,8 +70,10 @@
       >
         <button
           type="button"
-          onclick={() => (workspace.sql = entry.sql)}
-          class="min-w-0 flex-1 px-2 {workspace.density} text-left"
+          onclick={() => workspace.loadSaved(entry.id)}
+          aria-pressed={workspace.openQuery === entry.id}
+          class="min-w-0 flex-1 px-2 {workspace.density} text-left
+            {workspace.openQuery === entry.id ? 'text-primary' : ''}"
         >
           <span class="block truncate text-sm">{entry.name}</span>
 
