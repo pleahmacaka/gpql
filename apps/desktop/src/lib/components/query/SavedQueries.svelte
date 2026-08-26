@@ -63,7 +63,7 @@
     </button>
   </header>
 
-  <div class="flex-1 overflow-y-auto px-2 pb-2">
+  <div class="flex-1 scroll-smooth overflow-y-auto px-2 pb-2">
     {#each workspace.saved as entry (entry.id)}
       <div
         class="group flex items-center rounded-field hover:bg-base-200"

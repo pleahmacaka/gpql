@@ -87,12 +87,6 @@
     const at = input.selectionStart
     const prefix = wordBefore(at)
 
-    if (prefix.length < 2) {
-      hints = []
-
-      return
-    }
-
     const dialect = workspace.dialect
     const before = value.slice(0, at).split("\n")
     const line = before.length - 1
@@ -104,7 +98,9 @@
 
         if (found.length > 0) {
           hints = found
-            .filter(item => item.label.toLowerCase().startsWith(prefix.toLowerCase()))
+            .filter(item =>
+              item.label.toLowerCase().startsWith(prefix.toLowerCase()),
+            )
             .slice(0, 20)
           cursor = 0
 
@@ -155,6 +151,13 @@
   }
 
   function keys(event: KeyboardEvent) {
+    if (event.key === " " && event.ctrlKey) {
+      event.preventDefault()
+      void suggest()
+
+      return
+    }
+
     if (hints.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault()
@@ -232,7 +235,7 @@
   {#if hints.length > 0}
     <ul
       class="absolute top-full left-0 z-40 mt-1 max-h-48 w-64 overflow-y-auto
-        rounded-box bg-base-100 p-1 lift"
+        rounded-box floating p-1 lift"
     >
       {#each hints as hint, index (hint.label)}
         <li>

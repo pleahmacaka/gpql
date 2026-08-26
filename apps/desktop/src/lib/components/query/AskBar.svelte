@@ -8,7 +8,6 @@
   let provider = $state("")
 
   let choices = $derived([
-    ...(workspace.agent ? [{ id: "acp", name: "Agent" }] : []),
     ...workspace.providers.map(entry => ({ id: entry.id, name: entry.name })),
   ])
 
@@ -20,7 +19,7 @@
   }
 </script>
 
-{#if choices.length > 0}
+{#if workspace.ai && choices.length > 0}
   <div class="mx-3 mb-2 flex items-center gap-2 rounded-field bg-base-200 px-3 py-1.5">
     <Icon icon="lucide:sparkles" class="size-3.5 shrink-0 text-accent" />
 
