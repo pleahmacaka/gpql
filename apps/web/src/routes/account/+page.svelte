@@ -1,12 +1,12 @@
 <script lang="ts">
   import { authClient } from "$lib/auth-client"
-  import { Icon } from "@gpql/ui"
+  import { Icon, Logo } from "@gpql/ui"
 
   import type { PageData } from "./$types"
 
   let { data }: { data: PageData } = $props()
 
-  const start = (provider: "github" | "google") =>
+  const start = (provider: "github") =>
     authClient.signIn.social({
       provider,
       callbackURL: `/account${data.handoff}`,
@@ -18,7 +18,10 @@
 </svelte:head>
 
 <div class="mx-auto max-w-lg px-6 py-16">
-  <a href="/" class="font-display text-base font-medium">GPQL</a>
+  <a href="/" class="flex items-center gap-2 font-display text-base font-medium">
+    <Logo class="size-5" />
+    GPQL
+  </a>
 
   {#if !data.account}
     <h1 class="pt-8 font-display text-3xl font-bold tracking-tight">
@@ -38,16 +41,6 @@
       >
         <Icon icon="lucide:github" class="size-4" />
         Continue with GitHub
-      </button>
-
-      <button
-        type="button"
-        onclick={() => start("google")}
-        class="flex w-full items-center justify-center gap-2 rounded-field
-          bg-base-100 py-2.5 text-sm hairline hover:bg-base-300"
-      >
-        <Icon icon="lucide:chrome" class="size-4" />
-        Continue with Google
       </button>
     </div>
 

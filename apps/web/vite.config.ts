@@ -3,7 +3,7 @@ import { sveltekit } from "@sveltejs/kit/vite"
 import tailwindcss from "@tailwindcss/vite"
 import type { Plugin } from "vite"
 import { defineConfig } from "vite"
-import { attachErdSocket } from "./src/erd-socket"
+import { attachErdSocket } from "./src/erd-socket.ts"
 
 function erdSocket(): Plugin {
   return {

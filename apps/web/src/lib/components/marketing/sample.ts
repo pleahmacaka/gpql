@@ -6,7 +6,7 @@ export const draft: SessionDraft = {
   port: "5432",
   user: "postgres",
   password: "hunter2hunter2",
-  database: "smartfarmics",
+  database: "roomy",
   path: "",
   url: "",
   token: "",
@@ -55,41 +55,41 @@ export const backends = [
 
 export const columns = [
   "id",
-  "house",
-  "measured_at",
-  "leaf_count",
-  "leaf_area_cm2",
-  "note",
+  "channel",
+  "sent_at",
+  "words",
+  "reactions",
+  "pinned",
 ]
 
-const houses = ["greenhouse 1", "greenhouse 2", "nursery"]
+const channels = ["general", "releases", "random"]
 
 export const rows: (string | null)[][] = Array.from(
   { length: 240 },
   (_, index) => [
     String(index + 1),
-    houses[index % houses.length],
+    channels[index % channels.length],
     `2026-08-${String((index % 28) + 1).padStart(2, "0")}`,
-    String(64 + ((index * 7) % 48)),
-    (900 + ((index * 137) % 2400)).toFixed(1),
-    index % 9 === 0 ? null : "steady",
+    String(6 + ((index * 7) % 48)),
+    String((index * 3) % 12),
+    index % 9 === 0 ? null : "no",
   ],
 )
 
 export const tables: SchemaTable[] = [
   {
-    name: "user",
-    rows: 12,
+    name: "account",
+    rows: 4821,
     columns: [
       {
         name: "id",
-        dataType: "text",
+        dataType: "uuid",
         primaryKey: true,
         required: true,
         references: null,
       },
       {
-        name: "email",
+        name: "handle",
         dataType: "text",
         primaryKey: false,
         required: true,
@@ -98,8 +98,8 @@ export const tables: SchemaTable[] = [
     ],
   },
   {
-    name: "farm",
-    rows: 3,
+    name: "space",
+    rows: 37,
     columns: [
       {
         name: "id",
@@ -110,10 +110,10 @@ export const tables: SchemaTable[] = [
       },
       {
         name: "owner_id",
-        dataType: "text",
+        dataType: "uuid",
         primaryKey: false,
         required: true,
-        references: "user.id",
+        references: "account.id",
       },
       {
         name: "name",
@@ -125,8 +125,8 @@ export const tables: SchemaTable[] = [
     ],
   },
   {
-    name: "house",
-    rows: 7,
+    name: "channel",
+    rows: 214,
     columns: [
       {
         name: "id",
@@ -136,40 +136,88 @@ export const tables: SchemaTable[] = [
         references: null,
       },
       {
-        name: "farm_id",
+        name: "space_id",
         dataType: "uuid",
         primaryKey: false,
         required: true,
-        references: "farm.id",
+        references: "space.id",
+      },
+      {
+        name: "topic",
+        dataType: "text",
+        primaryKey: false,
+        required: false,
+        references: null,
       },
     ],
-    note: "one row per physical greenhouse",
+    note: "one row per room inside a space",
   },
   {
-    name: "leaf_measurement",
-    rows: 2679,
+    name: "message",
+    rows: 918432,
     columns: [
       {
         name: "id",
-        dataType: "integer",
+        dataType: "bigint",
         primaryKey: true,
         required: true,
         references: null,
       },
       {
-        name: "house_id",
+        name: "channel_id",
         dataType: "uuid",
         primaryKey: false,
         required: true,
-        references: "house.id",
+        references: "channel.id",
       },
       {
-        name: "leaf_count",
-        dataType: "integer",
+        name: "author_id",
+        dataType: "uuid",
+        primaryKey: false,
+        required: true,
+        references: "account.id",
+      },
+      {
+        name: "sent_at",
+        dataType: "timestamptz",
         primaryKey: false,
         required: true,
         references: null,
       },
     ],
+  },
+]
+
+export const engines = [
+  { name: "PostgreSQL", icon: "simple-icons:postgresql", note: "rustls" },
+  { name: "MySQL", icon: "simple-icons:mysql", note: "native wire" },
+  { name: "SQLite", icon: "simple-icons:sqlite", note: "file" },
+  { name: "DuckDB", icon: "simple-icons:duckdb", note: "bundled" },
+  { name: "Supabase", icon: "simple-icons:supabase", note: "postgres wire" },
+  { name: "GreptimeDB", icon: "simple-icons:greptimedb", note: "port 4003" },
+  {
+    name: "ClickHouse",
+    icon: "simple-icons:clickhouse",
+    note: "native client",
+  },
+  { name: "Turso", icon: "simple-icons:turso", note: "libsql" },
+  { name: "InfluxDB 3", icon: "simple-icons:influxdb", note: "arrow flight" },
+  { name: "InfluxDB 2", icon: "simple-icons:influxdb", note: "flux" },
+  { name: "Snowflake", icon: "simple-icons:snowflake", note: "account auth" },
+  { name: "Neo4j", icon: "simple-icons:neo4j", note: "bolt" },
+  { name: "FalkorDB", icon: "simple-icons:redis", note: "cypher" },
+  { name: "Cloudflare D1", icon: "simple-icons:cloudflare", note: "http api" },
+]
+
+export const ask = [
+  { role: "you", text: "busiest channels this week" },
+  {
+    role: "sql",
+    text: `select channel.topic, count(*) as messages
+from message
+join channel on channel.id = message.channel_id
+where message.sent_at > now() - interval '7 days'
+group by channel.topic
+order by messages desc`,
   },
 ]

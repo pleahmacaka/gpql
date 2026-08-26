@@ -14,7 +14,7 @@
 </script>
 
 <svelte:head>
-  <title>{data.room.name} · GPQL</title>
+  <title>{data.room.name}, GPQL</title>
 </svelte:head>
 
 <div class="flex h-screen flex-col">

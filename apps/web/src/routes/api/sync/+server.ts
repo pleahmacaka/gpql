@@ -80,3 +80,21 @@ export const POST: RequestHandler = async ({ request }) => {
       .where(eq(syncQuery.userId, userId)),
   })
 }
+
+export const DELETE: RequestHandler = async ({ request }) => {
+  const session = await auth.api.getSession({ headers: request.headers })
+
+  if (!session) {
+    throw error(401, "sign in first")
+  }
+
+  const userId = session.user.id
+
+  await db.transaction(async tx => {
+    await tx.delete(syncPreference).where(eq(syncPreference.userId, userId))
+    await tx.delete(syncRecent).where(eq(syncRecent.userId, userId))
+    await tx.delete(syncQuery).where(eq(syncQuery.userId, userId))
+  })
+
+  return json({ cleared: true })
+}
