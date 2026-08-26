@@ -5,6 +5,8 @@
 
   import TableList from "$lib/components/data/TableList.svelte"
   import { workspace } from "$lib/session/workspace.svelte"
+
+  import TabLayout from "$lib/components/shell/TabLayout.svelte"
   import { site } from "$lib/sync/client"
 
   import { relationCount } from "@gpql/ui"
@@ -13,8 +15,10 @@
   let relations = $derived(relationCount(workspace.schema))
 </script>
 
-<div class="flex h-full gap-2 p-2">
-  <TableList />
+<TabLayout>
+  {#snippet aside()}
+    <TableList />
+  {/snippet}
 
   <section class="flex min-w-0 flex-1 flex-col rounded-box bg-base-100 lift">
     <header class="flex items-baseline gap-2 px-4 pt-2 pb-1">
@@ -56,4 +60,4 @@
       </SvelteFlowProvider>
     </div>
   </section>
-</div>
+</TabLayout>

@@ -180,9 +180,17 @@
     >
       <SvelteFlowProvider>
         <SchemaBoard
+          minimap={workspace.minimap}
           tables={doc.tables}
           dark={workspace.dark}
-          tidyLabel={m.tidy()}
+          labels={{
+    auto: m.arrange_auto(),
+    picked: m.arrange_picked(),
+    group: m.group_make(),
+    ungroup: m.group_drop(),
+    warn: m.arrange_warn(),
+    groupName: m.group_name(),
+  }}
           onselect={name => (doc.selected = name)}
         />
       </SvelteFlowProvider>
