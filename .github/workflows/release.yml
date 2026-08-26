@@ -31,12 +31,9 @@ jobs:
       - name: cache bun modules
         uses: actions/cache@v5
         with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-            apps/desktop/node_modules
-            apps/web/node_modules
-            packages/ui/node_modules
+          # only the global store: bun links node_modules into it, and those
+          # links do not survive a cache round trip
+          path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: bun-${{ runner.os }}-
 
