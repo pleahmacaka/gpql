@@ -184,9 +184,9 @@ export class ErdDocument {
 }
 
 function fileName(path: string) {
-  const leaf = path.split(/[\/]/).pop() ?? path
+  const leaf = path.split(/[/]/).pop() ?? path
 
-  return leaf.replace(new RegExp(`\.${ERD_EXTENSION}$`), "")
+  return leaf.replace(new RegExp(`.${ERD_EXTENSION}$`), "")
 }
 
 function freeName(taken: string[], stem: string) {

@@ -24,6 +24,10 @@
     "yjs": "^13.6.32"
   },
   "devDependencies": {
-    "@iconify-json/lucide": "^1.2.125"
+    "@iconify-json/lucide": "^1.2.125",
+    "@iconify-json/simple-icons": "^1.2.93"
+  },
+  "scripts": {
+    "icons": "bun run ../../packages/ui/scripts/pick-icons.ts"
   }
 }

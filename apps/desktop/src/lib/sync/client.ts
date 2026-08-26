@@ -6,7 +6,9 @@ import { preference, recent, savedQuery } from "$lib/db/schema"
 import { accountToken, run } from "$lib/session/commands"
 import type { SyncPayload } from "$lib/types"
 
-const fallback = import.meta.env.DEV ? "http://localhost:5173" : "https://gpql.app"
+const fallback = import.meta.env.DEV
+  ? "http://localhost:5173"
+  : "https://gpql.app"
 
 export const site = import.meta.env.VITE_GPQL_SITE ?? fallback
 
@@ -63,4 +65,19 @@ async function absorb(theirs: SyncPayload) {
         set: { name: row.name, sql: row.sql, savedAt: row.savedAt },
       })
   }
+}
+
+export async function wipeCloud(): Promise<string> {
+  const token = await run(accountToken())
+
+  if (!token) {
+    return "sign in first"
+  }
+
+  await axios.delete(`${site}/api/sync`, {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 15_000,
+  })
+
+  return "cloud data cleared"
 }

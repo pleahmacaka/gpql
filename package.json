@@ -7,13 +7,14 @@
   ],
   "scripts": {
     "dev": "bun run --filter '*' dev",
-    "app": "cd apps/desktop && bun run tauri dev",
-    "app:build": "cd apps/desktop && bun run tauri build",
-    "app:test": "cd apps/desktop && bun test",
-    "web": "cd apps/web && bun run dev",
-    "web:build": "cd apps/web && bun run build",
-    "db:push": "cd apps/web && bun run db:push",
-    "check": "bunx biome check --write . && cd apps/desktop && bun run check && cd ../web && bun run check"
+    "dev:web": "bun run --filter web dev",
+    "dev:app": "bun run --filter desktop dev",
+    "build": "bun run --filter desktop tauri build",
+    "build:web": "bun run --filter web build",
+    "test": "bun run --filter desktop test",
+    "db:push": "bun run --filter web db:push",
+    "format": "bunx biome check --write .",
+    "check": "bun run --filter '*' check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.10"

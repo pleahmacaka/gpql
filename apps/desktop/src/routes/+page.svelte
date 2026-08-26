@@ -1,16 +1,11 @@
 <script lang="ts">
   import DataTab from "$lib/components/data/DataTab.svelte"
-  import QueryTab from "$lib/components/query/QueryTab.svelte"
-  import SchemaTab from "$lib/components/schema/SchemaTab.svelte"
   import ConnectPanel from "$lib/components/session/ConnectPanel.svelte"
   import SessionMenu from "$lib/components/session/SessionMenu.svelte"
-  import SettingsDialog from "$lib/components/settings/SettingsDialog.svelte"
-  import AgentChat from "$lib/components/agent/AgentChat.svelte"
-  import ErdEditor from "$lib/components/erd/ErdEditor.svelte"
   import FirstRun from "$lib/components/shell/FirstRun.svelte"
   import QuickActions from "$lib/components/shell/QuickActions.svelte"
   import TitleBar from "$lib/components/shell/TitleBar.svelte"
-  import "@gpql/ui"
+  import { Lazy } from "@gpql/ui"
   import { workspace } from "$lib/session/workspace.svelte"
   import { onMount } from "svelte"
 
@@ -27,6 +22,7 @@
 
     root.dataset.theme = workspace.theme
     root.dataset.acrylic = workspace.acrylic ? "on" : "off"
+    root.dataset.motion = workspace.motion ? "full" : "calm"
     root.style.setProperty(
       "--texture-amount",
       String(workspace.acrylic ? workspace.texture / 100 : 0),
@@ -35,6 +31,8 @@
 </script>
 
 <svelte:window
+  oncontextmenu={event => event.preventDefault()}
+  ondragstart={event => event.preventDefault()}
   onkeydown={event => {
     if (event.key === "Escape") {
       menuOpen = false
@@ -47,6 +45,11 @@
       workspace.chatOpen = !workspace.chatOpen
     }
 
+    if (event.key === "," && event.ctrlKey) {
+      event.preventDefault()
+      settingsOpen = true
+    }
+
     if (event.key === "k" && event.ctrlKey) {
       event.preventDefault()
       paletteOpen = !paletteOpen
@@ -54,6 +57,7 @@
   }}
 />
 
+{#key workspace.locale}
 <div class="relative flex h-full flex-col">
   <TitleBar
     {menuOpen}
@@ -62,12 +66,15 @@
   />
 
   <div class="flex min-h-0 flex-1">
-    <main class="min-h-0 flex-1 gridfield">
+    <main class="min-h-0 min-w-0 flex-1 gridfield">
     {#if !workspace.settled}
       <FirstRun ondone={() => workspace.settle()} />
     {:else if workspace.erd}
-      <ErdEditor doc={workspace.erd} />
-    {:else if !workspace.session}
+      <Lazy
+        load={() => import("$lib/components/erd/ErdEditor.svelte")}
+        props={{ doc: workspace.erd }}
+      />
+    {:else if !workspace.session || workspace.connecting}
       <div class="h-full overflow-y-auto">
         <div class="mx-auto w-96 py-10">
           <ConnectPanel />
@@ -76,15 +83,15 @@
     {:else if workspace.tab === "data"}
       <DataTab />
     {:else if workspace.tab === "query"}
-      <QueryTab />
+      <Lazy load={() => import("$lib/components/query/QueryTab.svelte")} />
     {:else}
-      <SchemaTab />
+      <Lazy load={() => import("$lib/components/schema/SchemaTab.svelte")} />
     {/if}
     </main>
 
-    {#if workspace.chatOpen}
+    {#if workspace.ai && workspace.chatOpen}
       <div class="min-h-0 py-2 pr-2">
-        <AgentChat />
+        <Lazy load={() => import("$lib/components/agent/AgentChat.svelte")} />
       </div>
     {/if}
   </div>
@@ -94,7 +101,10 @@
   {/if}
 
   {#if settingsOpen}
-    <SettingsDialog onclose={() => (settingsOpen = false)} />
+    <Lazy
+      load={() => import("$lib/components/settings/SettingsDialog.svelte")}
+      props={{ onclose: () => (settingsOpen = false) }}
+    />
   {/if}
 
   {#if paletteOpen}
@@ -108,3 +118,4 @@
     <div class="texture" aria-hidden="true"></div>
   {/if}
 </div>
+{/key}
