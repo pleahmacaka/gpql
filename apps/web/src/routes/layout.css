@@ -85,6 +85,7 @@
   --font-display: "Schibsted Grotesk", "Inter", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
   --animate-rise: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-spin: spin 1.8s linear infinite;
 
   @keyframes rise {
     from {

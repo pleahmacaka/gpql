@@ -84,6 +84,7 @@
     system-ui, sans-serif;
   --font-mono: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
   --animate-shake: shake 0.35s ease-in-out;
+  --animate-spin: spin 1.8s linear infinite;
 
   @keyframes shake {
     0%,
