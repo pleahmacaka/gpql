@@ -2,7 +2,7 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, Row, Value};
 use tokio::sync::Mutex;
 
-use crate::db::{QueryResult, SessionConfig, TableInfo};
+use crate::engines::db::{QueryResult, SessionConfig, TableInfo};
 
 pub struct MySql {
     connection: Mutex<Conn>,

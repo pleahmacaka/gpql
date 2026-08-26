@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,6 +34,10 @@ pub struct SessionConfig {
     pub url: String,
     #[serde(default)]
     pub token: String,
+    #[serde(default)]
+    pub warehouse: String,
+    #[serde(default)]
+    pub schema: String,
 }
 
 #[derive(Serialize)]
@@ -87,16 +91,17 @@ pub struct TableSchema {
 
 pub enum Engine {
     Postgres(tokio_postgres::Client),
-    MySql(crate::mysql::MySql),
-    Duck(crate::duck::Duck),
+    MySql(crate::engines::mysql::MySql),
+    Duck(crate::engines::duck::Duck),
     Sqlite(Mutex<Connection>),
-    Http(crate::remote::Http),
-    Graph(crate::remote::Graph),
+    Http(crate::engines::remote::Http),
+    Driver(Box<crate::engines::drivers::Driver>),
+    Graph(crate::engines::remote::Graph),
 }
 
 pub struct Session {
     pub engine: Engine,
-    pub read_only: bool,
+    pub read_only: AtomicBool,
     pub label: String,
     pub detail: String,
     pub kind: String,
@@ -108,6 +113,12 @@ pub struct Sessions {
     next: AtomicU64,
 }
 
+impl Session {
+    pub fn set_read_only(&self, on: bool) {
+        self.read_only.store(on, Ordering::Relaxed);
+    }
+}
+
 impl Sessions {
     pub fn insert(&self, session: Session) -> SessionHandle {
         let id = format!("s{}", self.next.fetch_add(1, Ordering::Relaxed));
@@ -116,7 +127,7 @@ impl Sessions {
             label: session.label.clone(),
             detail: session.detail.clone(),
             kind: session.kind.clone(),
-            read_only: session.read_only,
+            read_only: session.read_only.load(Ordering::Relaxed),
         };
 
         self.open.lock().unwrap().insert(id, Arc::new(session));
@@ -142,6 +153,21 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+fn quote_for(session: &Session, name: &str) -> String {
+    return match session.engine {
+        Engine::MySql(_) => format!("`{}`", name.replace('`', "``")),
+        Engine::Http(_) => format!("`{}`", name.replace('`', "``")),
+        _ => quote_ident(name),
+    };
+}
+
+fn literal(value: &Option<String>) -> String {
+    return match value {
+        None => "null".to_string(),
+        Some(text) => format!("'{}'", text.replace('\'', "''")),
+    };
+}
+
 fn pg_conn_string(config: &SessionConfig) -> String {
     let mut out = String::new();
 
@@ -164,9 +190,10 @@ fn pg_conn_string(config: &SessionConfig) -> String {
 }
 
 pub async fn open(config: &SessionConfig) -> Result<Session, String> {
-    use crate::backends::Transport;
+    use crate::engines::backends::Transport;
 
-    return match crate::backends::transport_of(&config.kind) {
+    return match crate::engines::backends::transport_of(&config.kind) {
+        Transport::Driver => open_driver(config).await,
         Transport::Sqlite => open_sqlite(config),
         Transport::DuckDb => open_duck(config),
         Transport::Http => open_http(config),
@@ -186,8 +213,8 @@ fn open_duck(config: &SessionConfig) -> Result<Session, String> {
         .to_string();
 
     return Ok(Session {
-        engine: Engine::Duck(crate::duck::Duck::open(config)?),
-        read_only: config.read_only,
+        engine: Engine::Duck(crate::engines::duck::Duck::open(config)?),
+        read_only: AtomicBool::new(config.read_only),
         label: name,
         detail: config.path.clone(),
         kind: config.kind.clone(),
@@ -199,8 +226,8 @@ async fn open_mysql(config: &SessionConfig) -> Result<Session, String> {
     let port = if config.port.is_empty() { "3306" } else { &config.port };
 
     return Ok(Session {
-        engine: Engine::MySql(crate::mysql::MySql::open(config).await?),
-        read_only: config.read_only,
+        engine: Engine::MySql(crate::engines::mysql::MySql::open(config).await?),
+        read_only: AtomicBool::new(config.read_only),
         label: config.database.clone(),
         detail: format!("{host}:{port}"),
         kind: config.kind.clone(),
@@ -242,6 +269,30 @@ fn flavoured(config: &SessionConfig) -> SessionConfig {
     return out;
 }
 
+async fn open_driver(config: &SessionConfig) -> Result<Session, String> {
+    let driver = crate::engines::drivers::Driver::open(config).await?;
+
+    let label = if config.database.is_empty() {
+        config.kind.clone()
+    } else {
+        config.database.clone()
+    };
+
+    let detail = if config.url.is_empty() {
+        config.host.clone()
+    } else {
+        config.url.clone()
+    };
+
+    return Ok(Session {
+        engine: Engine::Driver(Box::new(driver)),
+        read_only: AtomicBool::new(config.read_only),
+        label,
+        detail,
+        kind: config.kind.clone(),
+    });
+}
+
 fn open_http(config: &SessionConfig) -> Result<Session, String> {
     let hosted = config.kind == "supabase_api";
 
@@ -266,8 +317,8 @@ fn open_http(config: &SessionConfig) -> Result<Session, String> {
     };
 
     return Ok(Session {
-        engine: Engine::Http(crate::remote::Http::open(config)),
-        read_only: config.read_only,
+        engine: Engine::Http(crate::engines::remote::Http::open(config)),
+        read_only: AtomicBool::new(config.read_only),
         label,
         detail,
         kind: config.kind.clone(),
@@ -275,12 +326,12 @@ fn open_http(config: &SessionConfig) -> Result<Session, String> {
 }
 
 async fn open_graph(config: &SessionConfig) -> Result<Session, String> {
-    let graph = crate::remote::Graph::open(config).await?;
+    let graph = crate::engines::remote::Graph::open(config).await?;
     let label = graph.name.clone();
 
     return Ok(Session {
         engine: Engine::Graph(graph),
-        read_only: config.read_only,
+        read_only: AtomicBool::new(config.read_only),
         label,
         detail: config.url.clone(),
         kind: config.kind.clone(),
@@ -374,7 +425,7 @@ async fn open_postgres(config: &SessionConfig) -> Result<Session, String> {
 
     return Ok(Session {
         engine: Engine::Postgres(client),
-        read_only: config.read_only,
+        read_only: AtomicBool::new(config.read_only),
         label: config.database.clone(),
         detail: format!("{host}:{port}"),
         kind: "postgres".into(),
@@ -425,7 +476,7 @@ fn open_sqlite(config: &SessionConfig) -> Result<Session, String> {
 
     return Ok(Session {
         engine: Engine::Sqlite(Mutex::new(connection)),
-        read_only: config.read_only,
+        read_only: AtomicBool::new(config.read_only),
         label: name,
         detail: config.path.clone(),
         kind: "sqlite".into(),
@@ -439,6 +490,7 @@ pub async fn query(session: &Session, sql: &str) -> Result<QueryResult, String> 
         Engine::MySql(client) => client.query(sql).await,
         Engine::Duck(duck) => duck.query(sql),
         Engine::Http(remote) => remote.query(sql).await,
+        Engine::Driver(driver) => driver.query(sql).await,
         Engine::Graph(graph) => graph.query(sql).await,
     }
 }
@@ -572,8 +624,83 @@ pub async fn tables(session: &Session) -> Result<Vec<TableInfo>, String> {
         Engine::MySql(client) => client.tables().await,
         Engine::Duck(duck) => duck.tables(),
         Engine::Http(remote) => remote.tables().await,
+        Engine::Driver(driver) => driver.tables().await,
         Engine::Graph(graph) => graph.tables().await,
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Edit {
+    pub keys: HashMap<String, Option<String>>,
+    pub set: HashMap<String, Option<String>>,
+}
+
+pub async fn apply(
+    session: &Session,
+    table: &str,
+    edits: &[Edit],
+) -> Result<u64, String> {
+    if session.read_only.load(Ordering::Relaxed) {
+        return Err("this session is read only".into());
+    }
+
+    let mut touched = 0;
+
+    for edit in edits {
+        if edit.keys.is_empty() || edit.set.is_empty() {
+            continue;
+        }
+
+        let assignments = edit
+            .set
+            .iter()
+            .map(|(column, value)| {
+                format!("{} = {}", quote_for(session, column), literal(value))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let conditions = edit
+            .keys
+            .iter()
+            .map(|(column, value)| match value {
+                None => format!("{} is null", quote_for(session, column)),
+                Some(_) => {
+                    format!("{} = {}", quote_for(session, column), literal(value))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" and ");
+
+        let sql = format!(
+            "update {} set {assignments} where {conditions}",
+            quote_for(session, table)
+        );
+
+        let result = query(session, &sql).await?;
+
+        touched += result.affected.unwrap_or(0);
+    }
+
+    return Ok(touched);
+}
+
+pub async fn set_read_only(session: &Session, on: bool) -> Result<(), String> {
+    session.set_read_only(on);
+
+    if let Engine::Postgres(client) = &session.engine {
+        let wish = if on { "read only" } else { "read write" };
+
+        client
+            .batch_execute(&format!(
+                "set session characteristics as transaction {wish}"
+            ))
+            .await
+            .map_err(friendly_pg)?;
+    }
+
+    return Ok(());
 }
 
 pub async fn table_rows(
@@ -582,6 +709,12 @@ pub async fn table_rows(
     limit: u32,
     offset: u32,
 ) -> Result<QueryResult, String> {
+    if let Engine::Driver(driver) = &session.engine {
+        if let Some(script) = driver.rows_query(table, limit) {
+            return query(session, &script).await;
+        }
+    }
+
     let sql = match &session.engine {
         Engine::Graph(_) => format!("match (n:{table}) return n limit {limit}"),
         _ => format!(
@@ -982,6 +1115,8 @@ pub async fn scan_host(
                 password: password.clone(),
                 database: "postgres".into(),
                 path: String::new(),
+                warehouse: String::new(),
+                schema: String::new(),
                 read_only: true,
                 tls: "prefer".into(),
                 url: String::new(),

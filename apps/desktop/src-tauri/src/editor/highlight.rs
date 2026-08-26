@@ -17,6 +17,15 @@ struct Grammar {
     query: Query,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fault {
+    pub line: u32,
+    pub column: u32,
+    pub offset: u32,
+    pub text: String,
+}
+
 pub struct Highlighter {
     grammars: HashMap<&'static str, Grammar>,
 }
@@ -35,6 +44,39 @@ impl Grammar {
             parser: Mutex::new(parser),
             query,
         });
+    }
+
+    fn fault(&self, source: &str) -> Option<Fault> {
+        let mut parser = self.parser.lock().ok()?;
+        let tree = parser.parse(source, None)?;
+
+        if !tree.root_node().has_error() {
+            return None;
+        }
+
+        let mut cursor = tree.root_node().walk();
+        let mut stack = vec![tree.root_node()];
+
+        while let Some(node) = stack.pop() {
+            if node.is_error() || node.is_missing() {
+                let start = node.start_position();
+
+                return Some(Fault {
+                    line: start.row as u32,
+                    column: start.column as u32,
+                    offset: node.start_byte() as u32,
+                    text: source[node.byte_range()].trim().to_string(),
+                });
+            }
+
+            for child in node.children(&mut cursor) {
+                if child.has_error() {
+                    stack.push(child);
+                }
+            }
+        }
+
+        return None;
     }
 
     fn tokens(&self, source: &str) -> Vec<Token> {
@@ -98,6 +140,10 @@ impl Highlighter {
         return Ok(Highlighter { grammars });
     }
 
+    pub fn fault(&self, dialect: &str, source: &str) -> Option<Fault> {
+        return self.grammars.get(dialect)?.fault(source);
+    }
+
     pub fn tokens(&self, dialect: &str, source: &str) -> Vec<Token> {
         let grammar = self
             .grammars
@@ -105,5 +151,18 @@ impl Highlighter {
             .or_else(|| self.grammars.get("sql"));
 
         return grammar.map(|found| found.tokens(source)).unwrap_or_default();
+    }
+}
+
+#[cfg(test)]
+mod reading {
+    use super::*;
+
+    #[test]
+    fn spots_broken_sql() {
+        let reader = Highlighter::new().unwrap();
+
+        assert!(reader.fault("sql", "select * from users where id = 1").is_none());
+        assert!(reader.fault("sql", "select from where )(").is_some());
     }
 }

@@ -2,15 +2,13 @@ use redis::aio::MultiplexedConnection;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::db::{QueryResult, SessionConfig, TableInfo};
+use crate::engines::db::{QueryResult, SessionConfig, TableInfo};
 
 pub struct Http {
     pub flavour: String,
     pub url: String,
     pub token: String,
     pub database: String,
-    pub user: String,
-    pub password: String,
     client: reqwest::Client,
 }
 
@@ -26,21 +24,14 @@ impl Http {
             url: config.url.trim_end_matches('/').to_string(),
             token: config.token.clone(),
             database: config.database.clone(),
-            user: config.user.clone(),
-            password: config.password.clone(),
             client: reqwest::Client::new(),
         };
     }
 
     pub async fn query(&self, sql: &str) -> Result<QueryResult, String> {
         return match self.flavour.as_str() {
-            "influxdb" => self.influx(sql).await,
-            "clickhouse" => self.clickhouse(sql).await,
-            "neo4j" => self.neo4j(sql).await,
-            "snowflake" => self.snowflake(sql).await,
-            "d1" => self.d1(sql).await,
             "supabase_api" => self.supabase(sql).await,
-            _ => self.turso(sql).await,
+            _ => self.d1(sql).await,
         };
     }
 
@@ -155,216 +146,9 @@ impl Http {
         ));
     }
 
-    async fn clickhouse(&self, sql: &str) -> Result<QueryResult, String> {
-        let answer = self
-            .client
-            .post(&self.url)
-            .query(&[("database", self.database.as_str())])
-            .basic_auth(&self.user, Some(&self.password))
-            .body(format!("{sql} format JSONCompact"))
-            .send()
-            .await
-            .map_err(|error| error.to_string())?;
-
-        if !answer.status().is_success() {
-            return Err(answer
-                .text()
-                .await
-                .unwrap_or_else(|_| "clickhouse refused that".into()));
-        }
-
-        let body: Value = answer.json().await.map_err(|error| error.to_string())?;
-
-        return Ok(QueryResult {
-            columns: named(body.get("meta"), "name"),
-            rows: gridded(body.get("data")),
-            affected: None,
-        });
-    }
-
-    async fn neo4j(&self, cypher: &str) -> Result<QueryResult, String> {
-        let database = if self.database.is_empty() {
-            "neo4j"
-        } else {
-            &self.database
-        };
-
-        let body: Value = self
-            .client
-            .post(format!("{}/db/{database}/query/v2", self.url))
-            .basic_auth(&self.user, Some(&self.password))
-            .json(&serde_json::json!({ "statement": cypher }))
-            .send()
-            .await
-            .map_err(|error| error.to_string())?
-            .json()
-            .await
-            .map_err(|error| error.to_string())?;
-
-        if let Some(message) = body.pointer("/errors/0/message").and_then(Value::as_str) {
-            return Err(message.to_string());
-        }
-
-        let columns = body
-            .pointer("/data/fields")
-            .and_then(Value::as_array)
-            .map(|fields| {
-                fields
-                    .iter()
-                    .map(|field| field.as_str().unwrap_or_default().to_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        return Ok(QueryResult {
-            columns,
-            rows: gridded(body.pointer("/data/values")),
-            affected: None,
-        });
-    }
-
-    async fn snowflake(&self, sql: &str) -> Result<QueryResult, String> {
-        let body: Value = self
-            .client
-            .post(format!("{}/api/v2/statements", self.url))
-            .bearer_auth(&self.token)
-            .header(
-                "X-Snowflake-Authorization-Token-Type",
-                "PROGRAMMATIC_ACCESS_TOKEN",
-            )
-            .json(&serde_json::json!({
-                "statement": sql,
-                "database": self.database,
-                "timeout": 60,
-            }))
-            .send()
-            .await
-            .map_err(|error| error.to_string())?
-            .json()
-            .await
-            .map_err(|error| error.to_string())?;
-
-        if body.get("data").is_none() {
-            let message = body
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("snowflake refused that");
-
-            return Err(message.to_string());
-        }
-
-        return Ok(QueryResult {
-            columns: named(body.pointer("/resultSetMetaData/rowType"), "name"),
-            rows: gridded(body.get("data")),
-            affected: None,
-        });
-    }
-
-    async fn turso(&self, sql: &str) -> Result<QueryResult, String> {
-        let answer: Value = self
-            .client
-            .post(format!("{}/v2/pipeline", self.url))
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({
-                "requests": [
-                    { "type": "execute", "stmt": { "sql": sql } },
-                    { "type": "close" },
-                ]
-            }))
-            .send()
-            .await
-            .map_err(|error| error.to_string())?
-            .json()
-            .await
-            .map_err(|error| error.to_string())?;
-
-        if let Some(message) = answer
-            .pointer("/results/0/error/message")
-            .and_then(Value::as_str)
-        {
-            return Err(message.to_string());
-        }
-
-        let result = answer
-            .pointer("/results/0/response/result")
-            .ok_or_else(|| "turso answered with nothing".to_string())?;
-
-        let columns = result
-            .get("cols")
-            .and_then(Value::as_array)
-            .map(|cols| {
-                cols.iter()
-                    .map(|col| {
-                        col.get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        let rows = result
-            .get("rows")
-            .and_then(Value::as_array)
-            .map(|rows| {
-                rows.iter()
-                    .map(|row| {
-                        row.as_array()
-                            .unwrap_or(&Vec::new())
-                            .iter()
-                            .map(cell_of)
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        return Ok(QueryResult { columns, rows, affected: None });
-    }
-
-    async fn influx(&self, sql: &str) -> Result<QueryResult, String> {
-        let answer: Value = self
-            .client
-            .post(format!("{}/api/v3/query_sql", self.url))
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({
-                "db": self.database,
-                "q": sql,
-                "format": "json",
-            }))
-            .send()
-            .await
-            .map_err(|error| error.to_string())?
-            .json()
-            .await
-            .map_err(|error| error.to_string())?;
-
-        if let Some(message) = answer.get("error").and_then(Value::as_str) {
-            return Err(message.to_string());
-        }
-
-        let records = answer.as_array().cloned().unwrap_or_default();
-
-        return Ok(records_to_grid(records));
-    }
-
     pub async fn tables(&self) -> Result<Vec<TableInfo>, String> {
-        let listing = match self.flavour.as_str() {
-            "influxdb" | "clickhouse" | "snowflake" => "show tables",
-            "d1" => {
-                "select name from sqlite_master where type = 'table' \
-                 and name not like 'sqlite_%' order by name"
-            }
-            "neo4j" => "call db.labels() yield label return label",
-            "supabase_api" => {
-                "select table_name from information_schema.tables                  where table_schema = 'public' order by table_name"
-            }
-            _ => {
-                "select name from sqlite_master where type = 'table' \
-                 and name not like 'sqlite_%' order by name"
-            }
-        };
+        let listing = "select name from sqlite_master where type = 'table' \
+             and name not like 'sqlite_%' order by name";
 
         let result = self.query(listing).await?;
         let column = result
@@ -532,46 +316,7 @@ fn records_to_grid(records: Vec<Value>) -> QueryResult {
     return QueryResult { columns, rows, affected: None };
 }
 
-fn named(value: Option<&Value>, key: &str) -> Vec<String> {
-    return value
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .map(|entry| {
-                    entry
-                        .get(key)
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string()
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-}
 
-fn gridded(value: Option<&Value>) -> Vec<Vec<Option<String>>> {
-    return value
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .map(|row| {
-                    row.as_array()
-                        .map(|cells| cells.iter().map(text_of).collect())
-                        .unwrap_or_default()
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-}
-
-fn cell_of(value: &Value) -> Option<String> {
-    if let Some(inner) = value.get("value") {
-        return text_of(inner);
-    }
-
-    return text_of(value);
-}
 
 fn text_of(value: &Value) -> Option<String> {
     return match value {

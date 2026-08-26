@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use duckdb::Connection;
 use duckdb::types::ValueRef;
 
-use crate::db::{QueryResult, SessionConfig, TableInfo};
+use crate::engines::db::{QueryResult, SessionConfig, TableInfo};
 
 pub struct Duck {
     connection: Mutex<Connection>,

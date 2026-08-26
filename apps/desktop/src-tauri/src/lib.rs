@@ -1,22 +1,22 @@
-mod acp;
-mod ai;
-mod backends;
-mod db;
-mod duck;
-mod highlight;
-mod local;
-mod login;
-mod lsp;
-mod mysql;
-mod remote;
-mod tailnet;
-mod vault;
+mod editor;
+mod engines;
+mod net;
+mod store;
+
+use crate::engines::backends;
+use crate::engines::db;
+use crate::editor::highlight;
+use crate::editor::lsp;
+use crate::store::local;
+use crate::store::vault;
+use crate::net::login;
+use crate::net::tailnet;
 
 use db::{
-    Discovery, QueryResult, SessionConfig, SessionHandle, Sessions, TableInfo, TableSchema,
+    Discovery, Edit, QueryResult, SessionConfig, SessionHandle, Sessions, TableInfo,
+    TableSchema,
 };
 use highlight::{Highlighter, Token};
-use acp::Assistant;
 use local::Local;
 use lsp::{Completion, Diagnostic, Servers};
 use serde_json::Value as Json;
@@ -26,15 +26,130 @@ use vault::{Credential, Provider, SavedLogin};
 #[tauri::command]
 async fn check(config: SessionConfig) -> Result<String, String> {
     let session = db::open(&config).await?;
-    let probe = if config.kind == "sqlite" {
-        "select 'sqlite ' || sqlite_version()"
-    } else {
-        "select version()"
+
+    let probe = match (config.kind.as_str(), backends::dialect_of(&config.kind)) {
+        ("sqlite", _) => "select 'sqlite ' || sqlite_version()",
+        (_, "cypher") => "return 1",
+        (_, "flux") => {
+            let listed = db::tables(&session).await?;
+
+            return Ok(format!("{} buckets", listed.len()));
+        }
+        ("clickhouse", _) => "select version()",
+        ("snowflake", _) => "select current_version()",
+        ("influxdb", _) => "select 1",
+        ("turso" | "d1", _) => "select sqlite_version()",
+        _ => "select version()",
     };
 
     let result = db::query(&session, probe).await?;
 
-    return Ok(result.rows[0][0].clone().unwrap_or_else(|| "reachable".into()));
+    return Ok(result
+        .rows
+        .first()
+        .and_then(|row| row.first().cloned().flatten())
+        .unwrap_or_else(|| "reachable".into()));
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Waypoint {
+    url: String,
+    kind: String,
+}
+
+#[tauri::command]
+async fn probe_recents(items: Vec<Waypoint>) -> Vec<String> {
+    let logins = vault::list();
+
+    let checks = items.into_iter().map(|item| {
+        if item.kind == "erd" {
+            return Some(Look::File(item.url));
+        }
+
+        let login = logins
+            .iter()
+            .find(|saved| saved.url == item.url)
+            .or_else(|| logins.iter().find(|saved| tail(&saved.url) == tail(&item.url)))?;
+
+        if !login.path.is_empty() {
+            return Some(Look::File(login.path.clone()));
+        }
+
+        if login.endpoint.is_empty() {
+            return address_of(&format!(
+                "{}:{}",
+                login.host,
+                if login.port.is_empty() { "5432" } else { &login.port }
+            ))
+            .map(|(host, port)| Look::Port(host, port));
+        }
+
+        return address_of(&login.endpoint).map(|(host, port)| Look::Port(host, port));
+    });
+
+    let answers = checks.map(|check| {
+        tokio::task::spawn_blocking(move || match check {
+            None => String::new(),
+            Some(Look::File(path)) => missing_file(&path),
+            Some(Look::Port(host, port)) if host.is_empty() => {
+                let _ = port;
+
+                String::new()
+            }
+            Some(Look::Port(host, port)) => {
+                if db::reachable(&host, port, 400) {
+                    String::new()
+                } else {
+                    "down".to_string()
+                }
+            }
+        })
+    });
+
+    let mut out = Vec::new();
+
+    for answer in answers.collect::<Vec<_>>() {
+        out.push(answer.await.unwrap_or_default());
+    }
+
+    return out;
+}
+
+enum Look {
+    File(String),
+    Port(String, u16),
+}
+
+fn tail(url: &str) -> &str {
+    return match url.find("://") {
+        Some(at) => &url[at + 3..],
+        None => url,
+    };
+}
+
+fn missing_file(path: &str) -> String {
+    if std::path::Path::new(path).exists() {
+        return String::new();
+    }
+
+    return "gone".to_string();
+}
+
+fn address_of(endpoint: &str) -> Option<(String, u16)> {
+    let secure = endpoint.starts_with("https://");
+    let bare = endpoint
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = bare.split('/').next()?;
+
+    if let Some((name, port)) = host.rsplit_once(':') {
+        if let Ok(port) = port.parse::<u16>() {
+            return Some((name.to_string(), port));
+        }
+    }
+
+    return Some((host.to_string(), if secure { 443 } else { 80 }));
 }
 
 #[tauri::command]
@@ -124,6 +239,26 @@ async fn tables(id: String, sessions: State<'_, Sessions>) -> Result<Vec<TableIn
 }
 
 #[tauri::command]
+fn check_sql(
+    sql: String,
+    dialect: String,
+    reader: State<'_, highlight::Highlighter>,
+) -> Option<highlight::Fault> {
+    return reader.fault(&dialect, &sql);
+}
+
+#[tauri::command]
+async fn set_read_only(
+    id: String,
+    on: bool,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    return db::set_read_only(&session, on).await;
+}
+
+#[tauri::command]
 async fn table_rows(
     id: String,
     table: String,
@@ -145,6 +280,18 @@ async fn run_query(
     let session = sessions.get(&id)?;
 
     return db::query(&session, &sql).await;
+}
+
+#[tauri::command]
+async fn apply_edits(
+    id: String,
+    table: String,
+    edits: Vec<Edit>,
+    sessions: State<'_, Sessions>,
+) -> Result<u64, String> {
+    let session = sessions.get(&id)?;
+
+    return db::apply(&session, &table, &edits).await;
 }
 
 #[tauri::command]
@@ -359,6 +506,41 @@ fn forget_provider(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn save_connection(config: SessionConfig) -> Result<String, String> {
+    vault::remember(&config)?;
+
+    return Ok(vault::describe(&config));
+}
+
+#[tauri::command]
+async fn openrouter_models() -> Result<Vec<String>, String> {
+    let answer: serde_json::Value = reqwest::Client::new()
+        .get("https://openrouter.ai/api/v1/models")
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .json()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut names: Vec<String> = answer
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("id").and_then(|id| id.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    names.sort();
+
+    return Ok(names);
+}
+
+#[tauri::command]
 async fn connect_openrouter(model: String) -> Result<Provider, String> {
     let key = login::openrouter().await?;
     let provider = Provider {
@@ -376,79 +558,6 @@ async fn connect_openrouter(model: String) -> Result<Provider, String> {
     vault::save_provider(provider.clone())?;
 
     return Ok(provider);
-}
-
-#[tauri::command]
-async fn agent_start(
-    program: String,
-    args: Vec<String>,
-    assistant: State<'_, Assistant>,
-) -> Result<(), String> {
-    return assistant.start(&program, &args).await;
-}
-
-#[tauri::command]
-async fn agent_stop(assistant: State<'_, Assistant>) -> Result<(), String> {
-    assistant.stop().await;
-
-    return Ok(());
-}
-
-#[tauri::command]
-async fn agent_ready(assistant: State<'_, Assistant>) -> Result<bool, String> {
-    return Ok(assistant.ready().await);
-}
-
-#[tauri::command]
-async fn agent_chat(
-    prompt: String,
-    assistant: State<'_, Assistant>,
-) -> Result<String, String> {
-    return assistant.ask(&prompt).await;
-}
-
-#[tauri::command]
-async fn agent_sql(
-    prompt: String,
-    session_id: String,
-    assistant: State<'_, Assistant>,
-    sessions: State<'_, Sessions>,
-) -> Result<String, String> {
-    let outline = match sessions.get(&session_id) {
-        Ok(session) => ai::outline(&db::schema(&session).await?),
-        Err(_) => String::new(),
-    };
-
-    let ask = format!(
-        "Write one SQL statement for this schema. Answer with SQL only, no prose,          no code fences.
-
-Schema:
-{outline}
-
-Request: {prompt}"
-    );
-
-    return assistant.ask(&ask).await;
-}
-
-#[tauri::command]
-async fn ask_sql(
-    provider_id: String,
-    prompt: String,
-    session_id: String,
-    sessions: State<'_, Sessions>,
-) -> Result<String, String> {
-    let provider = vault::providers()
-        .into_iter()
-        .find(|entry| entry.id == provider_id)
-        .ok_or_else(|| "that provider is gone".to_string())?;
-
-    let outline = match sessions.get(&session_id) {
-        Ok(session) => ai::outline(&db::schema(&session).await?),
-        Err(_) => String::new(),
-    };
-
-    return ai::write_sql(&provider, &prompt, &outline).await;
 }
 
 #[tauri::command]
@@ -516,17 +625,21 @@ pub fn run() {
         .manage(Local::open().expect("gpql could not open its local database"))
         .manage(Highlighter::new().expect("gpql could not load its SQL grammar"))
         .manage(Servers::default())
-        .manage(Assistant::default())
         .invoke_handler(tauri::generate_handler![
             check,
+            probe_recents,
+            save_connection,
             databases,
             connect,
             disconnect,
             tables,
             table_rows,
+            set_read_only,
             run_query,
             schema,
+            apply_edits,
             highlight_sql,
+            check_sql,
             lsp_start,
             lsp_stop,
             lsp_running,
@@ -549,12 +662,7 @@ pub fn run() {
             save_provider,
             forget_provider,
             connect_openrouter,
-            ask_sql,
-            agent_start,
-            agent_stop,
-            agent_ready,
-            agent_chat,
-            agent_sql,
+            openrouter_models,
             saved_logins,
             forget_login,
             forget_all_logins,
@@ -578,4 +686,32 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod waypoints {
+    use super::*;
+
+    #[test]
+    fn reads_addresses() {
+        assert_eq!(
+            address_of("https://eu-1.turso.io"),
+            Some(("eu-1.turso.io".into(), 443))
+        );
+        assert_eq!(
+            address_of("http://127.0.0.1:8086"),
+            Some(("127.0.0.1".into(), 8086))
+        );
+        assert_eq!(
+            address_of("http://box:8123/metrics"),
+            Some(("box".into(), 8123))
+        );
+        assert_eq!(address_of("db.host:5432"), Some(("db.host".into(), 5432)));
+    }
+
+    #[test]
+    fn spots_missing_files() {
+        assert_eq!(missing_file("Cargo.toml"), "");
+        assert_eq!(missing_file("no-such-file.db"), "gone");
+    }
 }

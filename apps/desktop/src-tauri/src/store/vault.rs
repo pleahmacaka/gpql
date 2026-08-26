@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::SessionConfig;
+use crate::engines::db::SessionConfig;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +16,16 @@ pub struct SavedLogin {
     pub password: String,
     pub database: String,
     pub path: String,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub token: String,
+    #[serde(default)]
+    pub tls: String,
+    #[serde(default)]
+    pub warehouse: String,
+    #[serde(default)]
+    pub schema: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -59,6 +69,11 @@ impl SavedLogin {
             password: config.password.clone(),
             database: config.database.clone(),
             path: config.path.clone(),
+            endpoint: config.url.clone(),
+            token: config.token.clone(),
+            tls: config.tls.clone(),
+            warehouse: config.warehouse.clone(),
+            schema: config.schema.clone(),
         };
     }
 }
@@ -76,14 +91,30 @@ pub fn builtin_credentials() -> Vec<Credential> {
 }
 
 pub fn describe(config: &SessionConfig) -> String {
-    if config.kind == "sqlite" {
-        return config.path.clone();
+    let kind = &config.kind;
+
+    if !config.path.is_empty() {
+        return format!("{kind}://{}", config.path);
+    }
+
+    if !config.url.is_empty() {
+        let bare = config
+            .url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/');
+
+        if config.database.is_empty() {
+            return format!("{kind}://{bare}");
+        }
+
+        return format!("{kind}://{bare}/{}", config.database);
     }
 
     let host = if config.host.is_empty() { "127.0.0.1" } else { &config.host };
     let port = if config.port.is_empty() { "5432" } else { &config.port };
 
-    return format!("postgres://{}@{host}:{port}/{}", config.user, config.database);
+    return format!("{kind}://{}@{host}:{port}/{}", config.user, config.database);
 }
 
 fn home_file(name: &str) -> Result<PathBuf, String> {

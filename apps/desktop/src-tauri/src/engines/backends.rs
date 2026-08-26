@@ -2,6 +2,7 @@ use serde::Serialize;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Transport {
+    Driver,
     Postgres,
     MySql,
     Sqlite,
@@ -85,16 +86,19 @@ const REDIS_URL: &[Field] = &[
 ];
 
 const NEO4J: &[Field] = &[
-    field("url", "URL", "http://127.0.0.1:7474"),
+    field("url", "URL", "neo4j://127.0.0.1:7687"),
     field("user", "User", "neo4j"),
     secret("password", "Password"),
     field("database", "Database", "neo4j"),
 ];
 
 const SNOWFLAKE: &[Field] = &[
-    field("url", "Account URL", "https://org-account.snowflakecomputing.com"),
-    secret("token", "Access token"),
+    field("host", "Account", "org-account"),
+    field("user", "User", ""),
+    secret("password", "Password"),
+    field("warehouse", "Warehouse", ""),
     field("database", "Database", ""),
+    field("schema", "Schema", "PUBLIC"),
 ];
 
 const SUPABASE_API: &[Field] = &[
@@ -105,6 +109,12 @@ const SUPABASE_API: &[Field] = &[
 const D1: &[Field] = &[
     field("url", "Account ID", ""),
     field("database", "Database ID", ""),
+    secret("token", "API token"),
+];
+
+const FLUX: &[Field] = &[
+    field("url", "URL", "http://127.0.0.1:8086"),
+    field("user", "Organization", ""),
     secret("token", "API token"),
 ];
 
@@ -120,7 +130,7 @@ pub const CATALOG: &[Backend] = &[
         id: "postgres",
         label: "PostgreSQL",
         dialect: "sql",
-        icon: "lucide:database",
+        icon: "simple-icons:postgresql",
         port: "5432",
         fields: SERVER,
         transport: Transport::Postgres,
@@ -129,7 +139,7 @@ pub const CATALOG: &[Backend] = &[
         id: "mysql",
         label: "MySQL",
         dialect: "sql",
-        icon: "lucide:database",
+        icon: "simple-icons:mysql",
         port: "3306",
         fields: SERVER,
         transport: Transport::MySql,
@@ -138,7 +148,7 @@ pub const CATALOG: &[Backend] = &[
         id: "sqlite",
         label: "SQLite",
         dialect: "sql",
-        icon: "lucide:file",
+        icon: "simple-icons:sqlite",
         port: "",
         fields: FILE,
         transport: Transport::Sqlite,
@@ -147,7 +157,7 @@ pub const CATALOG: &[Backend] = &[
         id: "duckdb",
         label: "DuckDB",
         dialect: "sql",
-        icon: "lucide:file",
+        icon: "simple-icons:duckdb",
         port: "",
         fields: FILE,
         transport: Transport::DuckDb,
@@ -156,7 +166,7 @@ pub const CATALOG: &[Backend] = &[
         id: "supabase",
         label: "Supabase",
         dialect: "sql",
-        icon: "lucide:database",
+        icon: "simple-icons:supabase",
         port: "5432",
         fields: SUPABASE,
         transport: Transport::Postgres,
@@ -165,7 +175,7 @@ pub const CATALOG: &[Backend] = &[
         id: "supabase_api",
         label: "Supabase (token)",
         dialect: "sql",
-        icon: "lucide:cloud",
+        icon: "simple-icons:supabase",
         port: "",
         fields: SUPABASE_API,
         transport: Transport::Http,
@@ -174,7 +184,7 @@ pub const CATALOG: &[Backend] = &[
         id: "greptimedb",
         label: "GreptimeDB",
         dialect: "sql",
-        icon: "lucide:activity",
+        icon: "simple-icons:greptimedb",
         port: "4003",
         fields: SERVER,
         transport: Transport::Postgres,
@@ -183,61 +193,70 @@ pub const CATALOG: &[Backend] = &[
         id: "turso",
         label: "Turso",
         dialect: "sql",
-        icon: "lucide:cloud",
+        icon: "simple-icons:turso",
         port: "",
         fields: URL_TOKEN,
-        transport: Transport::Http,
+        transport: Transport::Driver,
     },
     Backend {
         id: "influxdb",
         label: "InfluxDB 3",
         dialect: "sql",
-        icon: "lucide:activity",
+        icon: "simple-icons:influxdb",
         port: "",
         fields: URL_TOKEN,
-        transport: Transport::Http,
+        transport: Transport::Driver,
     },
     Backend {
         id: "d1",
         label: "Cloudflare D1",
         dialect: "sql",
-        icon: "lucide:cloud",
+        icon: "simple-icons:cloudflare",
         port: "",
         fields: D1,
         transport: Transport::Http,
     },
     Backend {
+        id: "influxdb2",
+        label: "InfluxDB 2",
+        dialect: "flux",
+        icon: "simple-icons:influxdb",
+        port: "",
+        fields: FLUX,
+        transport: Transport::Driver,
+    },
+    Backend {
         id: "clickhouse",
         label: "ClickHouse",
         dialect: "sql",
-        icon: "lucide:bar-chart-3",
+        icon: "simple-icons:clickhouse",
         port: "8123",
         fields: CLICKHOUSE,
-        transport: Transport::Http,
+        transport: Transport::Driver,
     },
     Backend {
         id: "snowflake",
         label: "Snowflake",
         dialect: "sql",
-        icon: "lucide:snowflake",
+        icon: "simple-icons:snowflake",
         port: "",
         fields: SNOWFLAKE,
-        transport: Transport::Http,
+        transport: Transport::Driver,
     },
     Backend {
         id: "neo4j",
         label: "Neo4j",
         dialect: "cypher",
-        icon: "lucide:git-fork",
-        port: "7474",
+        icon: "simple-icons:neo4j",
+        port: "7687",
         fields: NEO4J,
-        transport: Transport::Http,
+        transport: Transport::Driver,
     },
     Backend {
         id: "falkordb",
         label: "FalkorDB",
         dialect: "cypher",
-        icon: "lucide:git-fork",
+        icon: "simple-icons:redis",
         port: "6379",
         fields: REDIS_URL,
         transport: Transport::Redis,
@@ -246,6 +265,10 @@ pub const CATALOG: &[Backend] = &[
 
 pub fn find(id: &str) -> Option<&'static Backend> {
     return CATALOG.iter().find(|backend| backend.id == id);
+}
+
+pub fn dialect_of(id: &str) -> &'static str {
+    return find(id).map(|backend| backend.dialect).unwrap_or("sql");
 }
 
 pub fn transport_of(id: &str) -> Transport {
