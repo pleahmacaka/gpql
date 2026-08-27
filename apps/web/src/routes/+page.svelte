@@ -192,8 +192,9 @@
             <h3 class="font-display text-lg font-medium">Data</h3>
 
             <p class="text-sm text-base-content/55">
-              Virtualized rows and columns, a minimap when the result runs
-              wide, and cell edits the moment you leave read only.
+              Sorting and filtering are pushed down to the server, so the
+              answer covers the whole table and not the page you happen to
+              have loaded. Export what you are looking at, filters and all.
             </p>
           </div>
 
@@ -268,8 +269,9 @@
 
             <p class="text-sm text-base-content/55">
               Tree-sitter highlighting per dialect, completion from a real
-              language server, a check before anything runs, and an ask bar
-              that writes the SQL with your own key.
+              language server, and an ask bar that writes the SQL with your own
+              key. When something drags, read the plan; a model will read it
+              with you and say what it would add.
             </p>
           </div>
 
@@ -316,6 +318,8 @@
             <p class="text-sm text-base-content/55">
               Tables laid out by what they point at, walkable with the arrow
               keys, and grouped by hand or, if you turn it on, by a model.
+              Views, indexes, routines and triggers sit beside them, and any of
+              them will show you the statement that made it.
             </p>
           </div>
 
@@ -337,8 +341,27 @@
       </div>
     </section>
 
+    <section class="pt-16 sm:pt-20" data-reveal use:reveal>
+      <h2
+        class="pt-3 font-display text-2xl font-bold tracking-tight sm:text-3xl"
+      >
+        Two databases, one window.
+      </h2>
+
+      <p class="max-w-2xl pt-4 text-base-content/65">
+        Open staging beside production. Each tab keeps its own tables, query
+        buffer and history, so nothing you run in one shows up in the other.
+      </p>
+
+      <p class="max-w-2xl pt-3 text-base-content/65">
+        Point the schema tab at the other tab and it will tell you what drifted,
+        then draft the migration. Anything that would drop a column or a table
+        comes out commented, for you to decide.
+      </p>
+    </section>
+
     <section class="mt-16 grid gap-4 sm:mt-20 sm:grid-cols-3" data-reveal use:reveal>
-      {#each [{ icon: "lucide:lock", title: "Read only is the default", text: "The server is asked to refuse writes until you flip one toggle, and it flips back on its own." }, { icon: "lucide:shield", title: "Keys stay on the machine", text: "Windows seals saved logins with DPAPI. Elsewhere the file is plaintext, and the readme says so." }, { icon: "lucide:git-fork", title: "Diagrams without a server", text: "Draw an ERD offline. Publish it only when someone else needs the room." }] as card (card.title)}
+      {#each [{ icon: "lucide:lock", title: "Read only is the default", text: "The server is asked to refuse writes until you flip one toggle, and it flips back on its own. Ask for manual commit and nothing lands until you say so." }, { icon: "lucide:shield", title: "Keys stay on the machine", text: "Windows seals saved logins with DPAPI. Elsewhere the file is plaintext, and the readme says so." }, { icon: "lucide:git-fork", title: "Diagrams without a server", text: "Draw an ERD offline. Publish it only when someone else needs the room." }] as card (card.title)}
         <article class="rounded-box bg-base-100 p-5 lift sm:p-6">
           <Icon icon={card.icon} class="size-5 text-accent" />
 
