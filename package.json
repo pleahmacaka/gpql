@@ -17,6 +17,7 @@
     "check": "bun run --filter '*' check"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.10"
+    "@biomejs/biome": "^2.5.10",
+    "svelte2tsx": "^0.7.61"
   }
 }
