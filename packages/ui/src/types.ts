@@ -13,6 +13,7 @@ export interface SchemaTable {
   columns: SchemaColumn[]
   note?: string | null
   hints?: string[]
+  policies?: string[]
 }
 
 export interface BackendField {
@@ -31,6 +32,15 @@ export interface BackendInfo {
   fields: BackendField[]
 }
 
+export interface SessionHop {
+  host: string
+  port: string
+  user: string
+  password: string
+  keyPath: string
+  passphrase: string
+}
+
 export interface SessionDraft {
   kind: string
   host: string
@@ -41,7 +51,8 @@ export interface SessionDraft {
   path: string
   url: string
   token: string
-  [key: string]: string | boolean
+  tunnel?: SessionHop
+  [key: string]: string | boolean | SessionHop | undefined
 }
 
 export interface CredentialPreset {

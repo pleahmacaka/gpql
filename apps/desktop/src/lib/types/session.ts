@@ -20,6 +20,15 @@ export interface BackendInfo {
   fields: BackendField[]
 }
 
+export interface TunnelConfig {
+  host: string
+  port: string
+  user: string
+  password: string
+  keyPath: string
+  passphrase: string
+}
+
 export interface SessionConfig {
   kind: Engine
   host: string
@@ -34,7 +43,8 @@ export interface SessionConfig {
   schema: string
   tls: string
   readOnly: boolean
-  [key: string]: string | boolean
+  tunnel?: TunnelConfig
+  [key: string]: string | boolean | TunnelConfig | undefined
 }
 
 export interface SessionHandle {
@@ -43,6 +53,8 @@ export interface SessionHandle {
   detail: string
   kind: Engine
   readOnly: boolean
+  sliceable: boolean
+  transactional: boolean
 }
 
 export interface Probe {
