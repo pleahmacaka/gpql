@@ -236,6 +236,7 @@
       {#each $rows.getVirtualItems() as row (row.key)}
         {@const table = shown[row.index]}
 
+        {#if table}
         <button
           type="button"
           onclick={() => workspace.select(table.name)}
@@ -264,6 +265,7 @@
 
           <span class="text-xs text-base-content/40">{table.rows}</span>
         </button>
+        {/if}
       {/each}
     </div>
   </div>

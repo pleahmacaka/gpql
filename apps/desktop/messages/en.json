@@ -330,5 +330,6 @@
   "diff_to_query": "Send SQL to query tab",
   "tab_diff": "Diff",
   "plan_diagnose": "Diagnose",
-  "schema_describe": "Describe tables"
+  "schema_describe": "Describe tables",
+  "open_here": "This window"
 }

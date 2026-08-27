@@ -330,5 +330,6 @@
   "diff_to_query": "SQL을 쿼리 탭으로",
   "tab_diff": "차이",
   "plan_diagnose": "진단",
-  "schema_describe": "테이블 설명"
+  "schema_describe": "테이블 설명",
+  "open_here": "열려 있는 세션"
 }

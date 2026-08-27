@@ -51,6 +51,18 @@
     }
   }
 
+  let others = $derived(
+    workspace.recents.filter(
+      entry =>
+        !workspace.connections.some(open => open.origin === entry.url),
+    ),
+  )
+
+  function jump(id: string) {
+    workspace.show(id)
+    onclose()
+  }
+
   async function fresh() {
     onclose()
     workspace.mode = "new"
@@ -80,14 +92,34 @@
   role="menu"
   tabindex="-1"
 >
-  <h2 class="px-1 pb-1 text-xs text-base-content/45">{m.opened_before()}</h2>
+  {#if workspace.connections.length > 0}
+    <h2 class="px-1 pb-1 text-xs text-base-content/45">{m.open_here()}</h2>
 
-  {#if workspace.recents.length === 0}
+    {#each workspace.connections as entry (entry.id)}
+      <ListRow
+        icon={workspace.iconFor(entry.handle.kind)}
+        title={entry.label}
+        detail={entry.handle.detail}
+        trailing={entry.id === workspace.active?.id
+          ? "lucide:check"
+          : "lucide:arrow-right"}
+        onclick={() => jump(entry.id)}
+      />
+    {/each}
+
+    <h2 class="px-1 pt-3 pb-1 text-xs text-base-content/45">
+      {m.opened_before()}
+    </h2>
+  {:else}
+    <h2 class="px-1 pb-1 text-xs text-base-content/45">{m.opened_before()}</h2>
+  {/if}
+
+  {#if others.length === 0}
     <p class="px-1 py-3 text-center text-sm text-base-content/45">
       {m.recent_empty()}
     </p>
   {:else}
-    {#each workspace.recents as entry (entry.url)}
+    {#each others as entry (entry.url)}
       <ListRow
         icon={workspace.iconFor(entry.kind)}
         title={entry.alias ?? entry.label}

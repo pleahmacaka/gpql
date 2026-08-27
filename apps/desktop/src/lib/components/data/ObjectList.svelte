@@ -56,7 +56,17 @@
 
   let open = $state<Record<string, boolean>>({})
 
-  // only a view has a definition worth opening on its own
+  const READABLE: ObjectKind[] = ["view", "sequence"]
+
+  async function show(entry: DbObject) {
+    if (!READABLE.includes(entry.kind)) {
+      return
+    }
+
+    workspace.tab = "data"
+    await workspace.select(entry.name)
+  }
+
   function openMenu(event: MouseEvent, entry: DbObject) {
     menu.show(event, [
       ...(entry.kind === "view"
@@ -109,10 +119,16 @@
       <div oncontextmenu={event => openMenu(event, entry)}>
         <button
           type="button"
+          onclick={() => show(entry)}
           ondblclick={() =>
             entry.kind === "view" ? workspace.showDdl(entry.name) : undefined}
+          aria-pressed={workspace.browse.table === entry.name}
           class="flex w-full items-center gap-2 rounded-field px-3 py-1
-            text-left hover:bg-base-200"
+            text-left {READABLE.includes(entry.kind)
+            ? 'hover:bg-base-200'
+            : 'cursor-default'} {workspace.browse.table === entry.name
+            ? 'bg-primary/10 text-primary'
+            : ''}"
         >
           <Icon
             icon={ICONS[entry.kind]}

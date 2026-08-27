@@ -660,6 +660,7 @@ export class Workspace {
 
       const opened = new Connection(handle, this.wiring)
 
+      opened.origin = api.describe(config)
       this.editing = null
       this.erd = null
       this.connections = [...this.connections, opened]

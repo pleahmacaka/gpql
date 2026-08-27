@@ -27,6 +27,7 @@ export type ConnectionHost = {
 // beside it instead of replacing it
 export class Connection {
   handle: SessionHandle
+  origin = $state("")
 
   tables = $state<TableInfo[]>([])
   objects = $state<DbObject[]>([])
