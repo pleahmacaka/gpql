@@ -766,6 +766,14 @@ export class Workspace {
       .map(column => column.name)
   }
 
+  get columnTypes() {
+    const found = this.schema.find(entry => entry.name === this.selected)
+
+    return Object.fromEntries(
+      (found?.columns ?? []).map(column => [column.name, column.dataType]),
+    )
+  }
+
   get writable() {
     return this.session !== null && !this.session.readOnly
   }
@@ -804,9 +812,26 @@ export class Workspace {
     this.busy = true
 
     try {
-      this.rows = await api.run(
+      const result = await api.run(
         api.tableRows(this.session.id, table, this.rowLimit, 0),
       )
+
+      this.rows = result
+
+      if (result.rows.length < this.rowLimit) {
+        const exact = result.rows.length
+        const info = this.tables.find(entry => entry.name === table)
+        const node = this.schema.find(entry => entry.name === table)
+
+        if (info) {
+          info.rows = exact
+        }
+
+        if (node) {
+          node.rows = exact
+        }
+      }
+
       await this.loadSchema()
     } finally {
       this.busy = false

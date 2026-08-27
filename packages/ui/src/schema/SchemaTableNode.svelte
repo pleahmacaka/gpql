@@ -31,7 +31,10 @@
       class="size-3.5 {active ? 'text-primary' : 'text-base-content/40'}"
     />
 
-    <h3 class="flex-1 truncate text-sm {active ? 'text-primary' : ''}">
+    <h3
+      class="flex-1 truncate text-sm {active ? 'text-primary' : ''}"
+      title={table.name}
+    >
       {table.name}
     </h3>
 
@@ -68,9 +71,17 @@
 
   <dl>
     {#each table.columns as column, index (column.name)}
+      {@const match =
+        board.needle !== "" &&
+        column.name.toLowerCase().includes(board.needle)}
+
       <div
         class="relative flex h-5.5 items-center gap-1.5 rounded-selector
-          {board.at(table.name, index) ? 'bg-primary/15' : ''}"
+          {board.at(table.name, index)
+            ? 'bg-primary/15'
+            : match
+              ? 'bg-accent/20'
+              : ''}"
       >
         {#if column.references}
           <Handle
@@ -89,7 +100,7 @@
 
         <dt
           class="min-w-0 flex-1 truncate text-xs"
-          title={column.note ?? undefined}
+          title={column.note ?? column.name}
         >
           {column.name}
         </dt>
@@ -106,6 +117,7 @@
             <span
               class="max-w-28 truncate rounded-selector bg-primary/10 px-1.5
                 py-0.5 text-primary"
+              title={column.references}
             >
               {column.references}
             </span>

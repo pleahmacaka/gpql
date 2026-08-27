@@ -39,9 +39,19 @@
     return out
   })
 
-  let spot = $derived(
-    workspace.finding ? (hits[Math.min(hit, hits.length - 1)] ?? null) : null,
-  )
+  let bump = $state(0)
+
+  let spot = $derived.by(() => {
+    bump
+
+    if (!workspace.finding) {
+      return null
+    }
+
+    const found = hits[Math.min(hit, hits.length - 1)]
+
+    return found ? { ...found } : null
+  })
 
   $effect(() => {
     term
@@ -51,6 +61,7 @@
   function step(by: number) {
     if (hits.length > 0) {
       hit = (hit + by + hits.length) % hits.length
+      bump++
     }
   }
 
@@ -144,7 +155,9 @@
       <ResultGrid
         result={workspace.rows}
         empty={workspace.selected ? m.no_rows() : m.pick_table()}
+        types={workspace.columnTypes}
         {spot}
+        needle={workspace.finding ? term.trim().toLowerCase() : ""}
         editable
         onblocked={() => (asking = true)}
       />

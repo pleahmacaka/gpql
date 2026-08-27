@@ -8,16 +8,20 @@
   type Props = {
     result: QueryResult | null
     empty: string
+    types?: Record<string, string>
     editable?: boolean
     spot?: { row: number; column: number } | null
+    needle?: string
     onblocked?: () => void
   }
 
   let {
     result,
     empty,
+    types = {},
     editable = false,
     spot = null,
+    needle = "",
     onblocked,
   }: Props = $props()
 </script>
@@ -30,12 +34,14 @@
   <DataGrid
     columns={result.columns}
     rows={result.rows}
+    {types}
     rowHeight={workspace.rowHeight}
     editable={editable && workspace.writable}
     keyColumns={editable ? workspace.keyColumns : []}
     busy={workspace.busy}
     minimap={workspace.minimap}
     {spot}
+    {needle}
     onapply={edits => workspace.applyEdits(edits)}
     {onblocked}
     labels={{

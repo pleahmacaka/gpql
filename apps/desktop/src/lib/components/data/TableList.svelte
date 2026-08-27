@@ -126,7 +126,9 @@
         >
           <Icon icon="lucide:table-2" class="size-3.5 shrink-0 opacity-60" />
 
-          <span class="flex-1 truncate text-sm">{table.name}</span>
+          <span class="flex-1 truncate text-sm" title={table.name}>
+            {table.name}
+          </span>
 
           <span class="text-xs text-base-content/40">{table.rows}</span>
         </button>

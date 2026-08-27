@@ -43,6 +43,14 @@
   })
 
   $effect(() => {
+    board.needle = workspace.finding ? term.trim().toLowerCase() : ""
+
+    return () => {
+      board.needle = ""
+    }
+  })
+
+  $effect(() => {
     const names = hits
 
     if (!workspace.finding || names.length === 0) {

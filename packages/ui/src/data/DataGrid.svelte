@@ -16,6 +16,7 @@
   type Props = {
     columns: string[]
     rows: (string | null)[][]
+    types?: Record<string, string>
     rowHeight?: number
     filterable?: boolean
     editable?: boolean
@@ -23,6 +24,7 @@
     busy?: boolean
     minimap?: boolean
     spot?: { row: number; column: number } | null
+    needle?: string
     onapply?: (edits: CellEdit[]) => Promise<void> | void
     onblocked?: () => void
     labels?: Partial<
@@ -47,6 +49,7 @@
   let {
     columns,
     rows,
+    types = {},
     rowHeight = 34,
     filterable = true,
     editable = false,
@@ -54,6 +57,7 @@
     busy = false,
     minimap = true,
     spot = null,
+    needle = "",
     onapply,
     onblocked,
     labels = {},
@@ -94,6 +98,7 @@
   let viewport = $state<HTMLDivElement | null>(null)
   let widths = $state<Record<string, number>>({})
   let filters = $state<Record<string, Filter>>({})
+  let sort = $state<{ column: string; dir: "asc" | "desc" } | null>(null)
   let openFilter = $state<string | null>(null)
   let cursor = $state<{ row: number; column: number } | null>(null)
   let editing = $state<{ row: number; column: number; draft: string } | null>(
@@ -121,16 +126,50 @@
       ([, filter]) => filter.value !== "" || !needsValue(filter.op),
     )
 
-    if (active.length === 0) {
-      return rows
+    let result =
+      active.length === 0
+        ? rows
+        : rows.filter(row =>
+            active.every(([name, filter]) =>
+              matches(row[columns.indexOf(name)], filter),
+            ),
+          )
+
+    if (sort) {
+      const index = columns.indexOf(sort.column)
+      const flip = sort.dir === "asc" ? 1 : -1
+
+      result = [...result].sort(
+        (a, b) => compare(a[index] ?? null, b[index] ?? null) * flip,
+      )
     }
 
-    return rows.filter(row =>
-      active.every(([name, filter]) =>
-        matches(row[columns.indexOf(name)], filter),
-      ),
-    )
+    return result
   })
+
+  function compare(a: string | null, b: string | null) {
+    if (a === null || b === null) {
+      return a === b ? 0 : a === null ? 1 : -1
+    }
+
+    const numbers = [Number(a), Number(b)]
+
+    if (numbers.every(entry => !Number.isNaN(entry))) {
+      return numbers[0] - numbers[1]
+    }
+
+    return a.localeCompare(b)
+  }
+
+  function toggleSort(name: string) {
+    if (sort?.column !== name) {
+      sort = { column: name, dir: "asc" }
+    } else if (sort.dir === "asc") {
+      sort = { column: name, dir: "desc" }
+    } else {
+      sort = null
+    }
+  }
 
 
   const needsValue = (op: string) =>
@@ -329,6 +368,7 @@
   $effect(() => {
     void rows
     void columns
+    void sort
 
     untrack(() => {
       staged = {}
@@ -336,6 +376,35 @@
       cursor = null
     })
   })
+
+  function autoFit(name: string) {
+    if (!viewport) {
+      return
+    }
+
+    const context = document.createElement("canvas").getContext("2d")
+
+    if (!context) {
+      return
+    }
+
+    const style = getComputedStyle(viewport)
+
+    context.font = `14px ${style.fontFamily}`
+
+    const index = columns.indexOf(name)
+    let widest = context.measureText(name).width + 24
+
+    // ponytail: first 1000 rows only, full scan if wide tails matter
+    for (const row of shown.slice(0, 1000)) {
+      widest = Math.max(widest, context.measureText(row[index] ?? "null").width)
+    }
+
+    widths = {
+      ...widths,
+      [name]: Math.min(Math.max(Math.ceil(widest) + 36, MIN_WIDTH), 480),
+    }
+  }
 
   function startResize(event: PointerEvent, name: string) {
     event.preventDefault()
@@ -465,7 +534,13 @@
       return
     }
 
-    untrack(() => focusCell(target.row, target.column))
+    untrack(() => {
+      const index = shown.indexOf(rows[target.row])
+
+      if (index >= 0) {
+        focusCell(index, target.column)
+      }
+    })
   })
 
   function focusCell(row: number, column: number) {
@@ -668,7 +743,10 @@
 
 <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
   {#if active.length > 0}
-    <div class="flex flex-wrap items-center gap-1 px-4 pb-1">
+    <div
+      class="absolute bottom-3 left-1/2 z-30 flex max-w-full -translate-x-1/2
+        flex-wrap items-center gap-1 rounded-field floating px-2 py-1 lift"
+    >
       {#each active as [name, filter] (name)}
         <span
           class="flex items-center gap-1 rounded-selector bg-primary/10 pr-1
@@ -745,7 +823,13 @@
               hover:text-base-content
               {filters[name] ? 'text-primary' : 'text-base-content/45'}"
           >
-            <span class="truncate">{name}</span>
+            <span class="truncate" title={name}>{name}</span>
+
+            {#if types[name]}
+              <span class="truncate text-base-content/30 lowercase">
+                {types[name]}
+              </span>
+            {/if}
 
             {#if keyColumns.includes(name)}
               <Icon icon="lucide:key-round" class="size-3 shrink-0 text-accent" />
@@ -758,8 +842,28 @@
 
           <button
             type="button"
+            aria-label="Sort {name}"
+            onclick={() => toggleSort(name)}
+            class="shrink-0 rounded-selector p-0.5
+              {sort?.column === name
+                ? 'text-primary'
+                : 'text-base-content/25 hover:text-base-content/60'}"
+          >
+            <Icon
+              icon={sort?.column === name
+                ? sort.dir === "asc"
+                  ? "lucide:arrow-up"
+                  : "lucide:arrow-down"
+                : "lucide:arrow-up-down"}
+              class="size-3"
+            />
+          </button>
+
+          <button
+            type="button"
             aria-label="Resize {name}"
             onpointerdown={event => startResize(event, name)}
+            ondblclick={() => autoFit(name)}
             class="h-6 w-1 shrink-0 cursor-col-resize bg-transparent
               hover:bg-primary/40"
           ></button>
@@ -879,6 +983,14 @@
           {@const touched = stamp(row.index, column.index) in staged}
           {@const here =
             cursor?.row === row.index && cursor?.column === column.index}
+          {@const found =
+            spot != null &&
+            shown[row.index] === rows[spot.row] &&
+            spot.column === column.index}
+          {@const match =
+            needle !== "" &&
+            cell != null &&
+            cell.toLowerCase().includes(needle)}
 
           {#if editing?.row === row.index && editing?.column === column.index}
             <!-- svelte-ignore a11y_autofocus -->
@@ -921,8 +1033,14 @@
               oncontextmenu={event => openMenu(event, row.index, column.index)}
               class="absolute flex h-full items-center truncate px-4
                 {cell === null ? 'text-base-content/35 italic' : ''}
-                {touched ? 'bg-primary/10 text-primary' : ''}
-                {here ? 'ring-2 ring-primary/70 ring-inset' : ''}"
+                {found
+                  ? 'bg-accent/30 ring-2 ring-accent ring-inset'
+                  : match
+                    ? 'bg-accent/15'
+                    : touched
+                      ? 'bg-primary/10 text-primary'
+                      : ''}
+                {here && !found ? 'ring-2 ring-primary/70 ring-inset' : ''}"
               style:left="{column.start}px"
               style:width="{column.size}px"
               title={cell ?? "null"}

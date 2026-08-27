@@ -43,6 +43,15 @@
   }
 </script>
 
+<svelte:window
+  onkeydown={event => {
+    if (event.key === "f" && event.ctrlKey) {
+      box?.focus()
+      box?.select()
+    }
+  }}
+/>
+
 <div
   class="flex items-center gap-1 rounded-field bg-base-200 px-2 py-1 hairline"
 >
@@ -57,7 +66,8 @@
       placeholder:text-base-content/30"
   />
 
-  <span class="w-12 text-right text-xs text-base-content/40">
+  <span class="shrink-0 text-right text-xs whitespace-nowrap
+      text-base-content/40">
     {term === ""
       ? ""
       : total === 0
