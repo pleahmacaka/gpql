@@ -14,12 +14,12 @@
   import { untrack } from "svelte"
   import * as Y from "yjs"
 
-  import ContextMenu from "../controls/ContextMenu.svelte"
+  import { menu, type MenuItem } from "../controls/menu.svelte"
   import { board, type TableGroup } from "./board.svelte"
   import { Icon } from "../icons"
   import BandNode from "./BandNode.svelte"
   import LevelNode from "./LevelNode.svelte"
-  import { byLevel, toFlow } from "./levels"
+  import { NODE_CENTRE, byLevel, columnOffset, toFlow } from "./levels"
   import SchemaTableNode from "./SchemaTableNode.svelte"
   import type { SchemaTable } from "../types"
 
@@ -39,7 +39,8 @@
         | "groupName"
         | "think"
         | "nothing"
-        | "rest",
+        | "rest"
+        | "define",
         string
       >
     >
@@ -73,6 +74,7 @@
     think: labels.think ?? "Group with AI",
     nothing: labels.nothing ?? "the model found no grouping worth keeping",
     rest: labels.rest ?? "everything else",
+    define: labels.define ?? "Show definition",
   })
 
   let armed = $state(false)
@@ -138,7 +140,39 @@
 
       board.table = target
       board.column = -1
-      flow.fitView({ nodes: [{ id: target }], duration: 220, maxZoom: 1 })
+
+      const table = plain.find(entry => entry.name === target)
+      const index =
+        board.needle && table
+          ? table.columns.findIndex(column =>
+              column.name.toLowerCase().includes(board.needle),
+            )
+          : -1
+
+      if (index >= 0 && table) {
+        board.column = index
+
+        const spot =
+          flow.getInternalNode(target)?.internals.positionAbsolute ??
+          nodes.find(node => node.id === target)?.position
+
+        if (spot) {
+          flow.setCenter(
+            spot.x + NODE_CENTRE,
+            spot.y + columnOffset(table, index),
+            { zoom: 1, duration: 220 },
+          )
+
+          return
+        }
+      }
+
+      flow.fitView({
+        nodes: [{ id: target }],
+        duration: 220,
+        maxZoom: 1,
+        minZoom: 1,
+      })
     })
   })
 
@@ -230,11 +264,6 @@
   }
 
   let thinking = $state(false)
-  let menu = $state<{
-    x: number
-    y: number
-    items: { label: string; icon?: string; danger?: boolean; run: () => void }[]
-  } | null>(null)
   let notice = $state("")
 
   async function suggest() {
@@ -298,7 +327,15 @@
     }
 
     const held = table === "" ? undefined : board.groupOf(table)
-    const items = []
+    const items: MenuItem[] = []
+
+    if (held === undefined && board.ondefine) {
+      items.push({
+        label: words.define,
+        icon: "lucide:file-code-2",
+        run: () => board.ondefine?.(table),
+      })
+    }
 
     if (board.picked.length > 1) {
       items.push({
@@ -341,7 +378,7 @@
       },
     })
 
-    menu = { x: event.clientX, y: event.clientY, items }
+    menu.show(event, items)
   }
 
   function dropGroup(id: string) {
@@ -417,7 +454,12 @@
 
     board.table = table
     board.column = column
-    flow.fitView({ nodes: [{ id: table }], duration: 180, maxZoom: 1 })
+    flow.fitView({
+      nodes: [{ id: table }],
+      duration: 180,
+      maxZoom: 1,
+      minZoom: 1,
+    })
   }
 
   function move(step: number, axis: "row" | "level") {
@@ -628,11 +670,3 @@
   </Panel>
 </SvelteFlow>
 
-{#if menu}
-  <ContextMenu
-    x={menu.x}
-    y={menu.y}
-    items={menu.items}
-    onclose={() => (menu = null)}
-  />
-{/if}

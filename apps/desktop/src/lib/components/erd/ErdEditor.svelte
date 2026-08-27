@@ -2,11 +2,11 @@
   import { SvelteFlowProvider } from "@xyflow/svelte"
 
   import {
-    ContextMenu,
     Dropdown,
     Icon,
     SchemaBoard,
     board,
+    menu,
     relationCount,
   } from "@gpql/ui"
 
@@ -36,24 +36,16 @@
     board.selected = doc.selected
   })
 
-  let menu = $state<{
-    x: number
-    y: number
-    items: { label: string; icon?: string; danger?: boolean; run: () => void }[]
-  } | null>(null)
 
   function openMenu(event: MouseEvent) {
-    event.preventDefault()
-
     const spot = event.target as HTMLElement | null
     const node = spot?.closest<HTMLElement>(".svelte-flow__node")
     const name = node?.dataset.id ?? ""
     const table = doc.tables.find(entry => entry.name === name)
 
-    menu = {
-      x: event.clientX,
-      y: event.clientY,
-      items: table
+    menu.show(
+      event,
+      table
         ? [
             {
               label: m.erd_add_column(),
@@ -82,7 +74,7 @@
               run: () => doc.addTable(),
             },
           ],
-    }
+    )
   }
 </script>
 
@@ -196,15 +188,6 @@
         />
       </SvelteFlowProvider>
     </div>
-
-    {#if menu}
-      <ContextMenu
-        x={menu.x}
-        y={menu.y}
-        items={menu.items}
-        onclose={() => (menu = null)}
-      />
-    {/if}
   </section>
 
   {#if table}

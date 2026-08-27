@@ -107,10 +107,33 @@ function tidy(columns: Column[]) {
   }
 }
 
-function cardHeight(table: SchemaTable) {
-  const notes = table.note ? LINE_HEIGHT : 0
+export function noteLines(table: SchemaTable) {
+  const note = table.note ? table.note.split(/\r?\n/).length : 0
 
-  return HEADER_HEIGHT + table.columns.length * LINE_HEIGHT + CARD_PADDING + notes
+  return note + (table.policies?.length ?? 0)
+}
+
+// the header wraps long names at roughly 24 characters per line
+function headerWraps(table: SchemaTable) {
+  return Math.max(Math.ceil(table.name.length / 24) - 1, 0)
+}
+
+export function columnOffset(table: SchemaTable, index: number) {
+  const head = HEADER_HEIGHT + (headerWraps(table) + noteLines(table)) * LINE_HEIGHT
+
+  return head + index * LINE_HEIGHT + LINE_HEIGHT / 2
+}
+
+export const NODE_CENTRE = NODE_WIDTH / 2
+
+function cardHeight(table: SchemaTable) {
+  const extra = headerWraps(table) + noteLines(table)
+
+  return (
+    HEADER_HEIGHT +
+    (table.columns.length + extra) * LINE_HEIGHT +
+    CARD_PADDING
+  )
 }
 
 const BAND_PAD = 16

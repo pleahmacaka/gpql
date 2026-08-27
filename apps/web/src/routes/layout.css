@@ -122,6 +122,25 @@ body {
   background-color: var(--floating);
 }
 
+.tip {
+  position: fixed;
+  z-index: 90;
+  display: none;
+  max-width: 20rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  background: var(--floating);
+  color: var(--color-base-content);
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--color-base-content) 12%, transparent),
+    0 0.25rem 0.75rem color-mix(in oklch, var(--color-base-content) 18%, transparent);
+  white-space: pre-line;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+
 .hairline {
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-base-content) 7%, transparent);
 }

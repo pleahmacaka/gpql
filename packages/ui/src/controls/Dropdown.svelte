@@ -1,10 +1,10 @@
-<script lang="ts">
+<script lang="ts" generics="Value extends string">
   import { Icon } from "../icons"
 
   type Props = {
-    options: { value: string; label: string }[]
-    value: string
-    onpick: (value: string) => void
+    options: { value: Value; label: string }[]
+    value: Value
+    onpick: (value: Value) => void
     wide?: boolean
     search?: string
     empty?: string
@@ -32,7 +32,7 @@
         ),
   )
 
-  function pick(next: string) {
+  function pick(next: Value) {
     onpick(next)
     query = ""
 

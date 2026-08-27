@@ -5,7 +5,7 @@
   import { workspace } from "$lib/session/workspace.svelte"
 
   $effect(() => {
-    board.selected = workspace.selected
+    board.selected = workspace.browse.table
   })
 
   $effect(() => {
@@ -26,9 +26,11 @@
       workspace.tab = "data"
       workspace.select(table)
     }
+    board.ondefine = table => workspace.showDdl(table)
 
     return () => {
       board.onopen = null
+      board.ondefine = null
     }
   })
 
@@ -58,6 +60,7 @@
     think: m.group_ai(),
     nothing: m.group_ai_none(),
     rest: m.group_rest(),
+    define: m.menu_ddl(),
   }}
   keyboard={workspace.tab === "schema"}
   minimap={workspace.minimap}

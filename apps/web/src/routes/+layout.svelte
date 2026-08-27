@@ -1,7 +1,11 @@
 <script lang="ts">
-	import './layout.css';
+  import "./layout.css"
 
-	let { children } = $props();
+  import { MenuHost } from "@gpql/ui"
+
+  let { children } = $props()
 </script>
 
 {@render children()}
+
+<MenuHost />

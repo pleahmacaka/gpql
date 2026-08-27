@@ -2,6 +2,7 @@
   import { Handle, Position, type NodeProps } from "@xyflow/svelte"
 
   import { board } from "./board.svelte"
+  import { tooltip } from "../controls/tooltip"
   import { Icon } from "../icons"
   import type { SchemaTable } from "../types"
 
@@ -32,7 +33,7 @@
     />
 
     <h3
-      class="flex-1 truncate text-sm {active ? 'text-primary' : ''}"
+      class="min-w-0 flex-1 break-words text-sm {active ? 'text-primary' : ''}"
       title={table.name}
     >
       {table.name}
@@ -69,6 +70,17 @@
     />
   {/if}
 
+  {#if table.policies?.length}
+    <ul class="pb-2">
+      {#each table.policies as policy (policy)}
+        <li class="flex items-center gap-1 text-xs text-warning/80">
+          <Icon icon="lucide:shield" class="size-3 shrink-0" />
+          <span class="truncate">{policy}</span>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
   <dl>
     {#each table.columns as column, index (column.name)}
       {@const match =
@@ -100,7 +112,9 @@
 
         <dt
           class="min-w-0 flex-1 truncate text-xs"
-          title={column.note ?? column.name}
+          use:tooltip={column.note
+            ? `${column.name}\n${column.note}`
+            : `${column.name}\n${column.dataType}`}
         >
           {column.name}
         </dt>

@@ -14,6 +14,7 @@ export class Board {
   picked = $state<string[]>([])
   groups = $state<TableGroup[]>([])
   onopen = $state<((table: string) => void) | null>(null)
+  ondefine = $state<((table: string) => void) | null>(null)
   rename = $state<((id: string, name: string) => void) | null>(null)
   ungroup = $state<((id: string) => void) | null>(null)
   spots = $state<Record<string, Spot>>({})
@@ -28,6 +29,20 @@ export class Board {
 
   groupOf(table: string) {
     return this.groups.find(group => group.tables.includes(table))
+  }
+
+  focus(table: string | null) {
+    this.selected = table
+    this.table = table
+    this.column = -1
+  }
+
+  reset() {
+    this.focus(null)
+    this.needle = ""
+    this.picked = []
+    this.groups = []
+    this.spots = {}
   }
 }
 
