@@ -1,16 +1,18 @@
 use std::collections::HashMap;
-use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::{NoTls, SimpleQueryMessage};
+
+use super::errors::{friendly, friendly_pg};
+use super::slicing::sliceable;
+use super::writing::{begin_if_manual, transactional};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionConfig {
     pub kind: String,
@@ -38,6 +40,8 @@ pub struct SessionConfig {
     pub warehouse: String,
     #[serde(default)]
     pub schema: String,
+    #[serde(default)]
+    pub tunnel: crate::net::tunnel::TunnelConfig,
 }
 
 #[derive(Serialize)]
@@ -48,9 +52,11 @@ pub struct SessionHandle {
     pub detail: String,
     pub kind: String,
     pub read_only: bool,
+    pub sliceable: bool,
+    pub transactional: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryResult {
     pub columns: Vec<String>,
@@ -77,7 +83,7 @@ pub struct ColumnInfo {
     pub note: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TableSchema {
     pub name: String,
@@ -87,6 +93,8 @@ pub struct TableSchema {
     pub note: Option<String>,
     #[serde(default)]
     pub hints: Vec<String>,
+    #[serde(default)]
+    pub policies: Vec<String>,
 }
 
 pub enum Engine {
@@ -102,6 +110,8 @@ pub enum Engine {
 pub struct Session {
     pub engine: Engine,
     pub read_only: AtomicBool,
+    pub manual: AtomicBool,
+    pub open_tx: AtomicBool,
     pub label: String,
     pub detail: String,
     pub kind: String,
@@ -128,11 +138,19 @@ impl Sessions {
             detail: session.detail.clone(),
             kind: session.kind.clone(),
             read_only: session.read_only.load(Ordering::Relaxed),
+            sliceable: sliceable(&session),
+            transactional: transactional(&session),
         };
 
         self.open.lock().unwrap().insert(id, Arc::new(session));
 
         return handle;
+    }
+
+    // a webview reload drops every handle the frontend held, so the sessions
+    // behind them leak server slots unless the fresh page clears them
+    pub fn clear(&self) {
+        self.open.lock().unwrap().clear();
     }
 
     pub fn get(&self, id: &str) -> Result<Arc<Session>, String> {
@@ -149,19 +167,23 @@ impl Sessions {
     }
 }
 
-fn quote_ident(name: &str) -> String {
+pub fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-fn quote_for(session: &Session, name: &str) -> String {
-    return match session.engine {
+pub fn quote_for(session: &Session, name: &str) -> String {
+    return match &session.engine {
         Engine::MySql(_) => format!("`{}`", name.replace('`', "``")),
-        Engine::Http(_) => format!("`{}`", name.replace('`', "``")),
+        // d1 is sqlite and takes either, but supabase is postgres over http
+        // and rejects a backtick outright
+        Engine::Http(remote) if remote.flavour != "supabase_api" => {
+            format!("`{}`", name.replace('`', "``"))
+        }
         _ => quote_ident(name),
     };
 }
 
-fn literal(value: &Option<String>) -> String {
+pub fn literal(value: &Option<String>) -> String {
     return match value {
         None => "null".to_string(),
         Some(text) => format!("'{}'", text.replace('\'', "''")),
@@ -215,6 +237,8 @@ fn open_duck(config: &SessionConfig) -> Result<Session, String> {
     return Ok(Session {
         engine: Engine::Duck(crate::engines::duck::Duck::open(config)?),
         read_only: AtomicBool::new(config.read_only),
+        manual: AtomicBool::new(false),
+        open_tx: AtomicBool::new(false),
         label: name,
         detail: config.path.clone(),
         kind: config.kind.clone(),
@@ -228,6 +252,8 @@ async fn open_mysql(config: &SessionConfig) -> Result<Session, String> {
     return Ok(Session {
         engine: Engine::MySql(crate::engines::mysql::MySql::open(config).await?),
         read_only: AtomicBool::new(config.read_only),
+        manual: AtomicBool::new(false),
+        open_tx: AtomicBool::new(false),
         label: config.database.clone(),
         detail: format!("{host}:{port}"),
         kind: config.kind.clone(),
@@ -287,6 +313,8 @@ async fn open_driver(config: &SessionConfig) -> Result<Session, String> {
     return Ok(Session {
         engine: Engine::Driver(Box::new(driver)),
         read_only: AtomicBool::new(config.read_only),
+        manual: AtomicBool::new(false),
+        open_tx: AtomicBool::new(false),
         label,
         detail,
         kind: config.kind.clone(),
@@ -319,6 +347,8 @@ fn open_http(config: &SessionConfig) -> Result<Session, String> {
     return Ok(Session {
         engine: Engine::Http(crate::engines::remote::Http::open(config)),
         read_only: AtomicBool::new(config.read_only),
+        manual: AtomicBool::new(false),
+        open_tx: AtomicBool::new(false),
         label,
         detail,
         kind: config.kind.clone(),
@@ -332,13 +362,28 @@ async fn open_graph(config: &SessionConfig) -> Result<Session, String> {
     return Ok(Session {
         engine: Engine::Graph(graph),
         read_only: AtomicBool::new(config.read_only),
+        manual: AtomicBool::new(false),
+        open_tx: AtomicBool::new(false),
         label,
         detail: config.url.clone(),
         kind: config.kind.clone(),
     });
 }
 
+// reqwest pulls rustls/ring and clickhouse pulls rustls/aws-lc-rs, so rustls
+// sees two providers and refuses to pick one; without this every builder call
+// below panics instead of connecting
+fn install_crypto() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 fn tls_connector(verify: bool) -> MakeRustlsConnect {
+    install_crypto();
+
     let settings = if verify {
         let roots = rustls::RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
@@ -426,6 +471,8 @@ async fn open_postgres(config: &SessionConfig) -> Result<Session, String> {
     return Ok(Session {
         engine: Engine::Postgres(client),
         read_only: AtomicBool::new(config.read_only),
+        manual: AtomicBool::new(false),
+        open_tx: AtomicBool::new(false),
         label: config.database.clone(),
         detail: format!("{host}:{port}"),
         kind: "postgres".into(),
@@ -477,6 +524,8 @@ fn open_sqlite(config: &SessionConfig) -> Result<Session, String> {
     return Ok(Session {
         engine: Engine::Sqlite(Mutex::new(connection)),
         read_only: AtomicBool::new(config.read_only),
+        manual: AtomicBool::new(false),
+        open_tx: AtomicBool::new(false),
         label: name,
         detail: config.path.clone(),
         kind: "sqlite".into(),
@@ -510,7 +559,7 @@ mod refusing {
 
 // the ui promises read only, so every engine refuses writes here, not just the
 // ones whose server can be asked to
-fn reads_only(sql: &str) -> bool {
+pub fn reads_only(sql: &str) -> bool {
     // flux writes `from(bucket:)` with no space, so cut at the first
     // non-letter instead of at whitespace
     let head: String = sql
@@ -539,8 +588,14 @@ fn reads_only(sql: &str) -> bool {
 }
 
 pub async fn query(session: &Session, sql: &str) -> Result<QueryResult, String> {
-    if session.read_only.load(Ordering::Relaxed) && !reads_only(sql) {
+    let writes = !reads_only(sql);
+
+    if session.read_only.load(Ordering::Relaxed) && writes {
         return Err("this session is read only".into());
+    }
+
+    if writes {
+        begin_if_manual(session).await?;
     }
 
     match &session.engine {
@@ -554,7 +609,7 @@ pub async fn query(session: &Session, sql: &str) -> Result<QueryResult, String> 
     }
 }
 
-async fn query_postgres(client: &tokio_postgres::Client, sql: &str) -> Result<QueryResult, String> {
+pub async fn query_postgres(client: &tokio_postgres::Client, sql: &str) -> Result<QueryResult, String> {
     let messages = client.simple_query(sql).await.map_err(friendly_pg)?;
 
     let mut columns: Vec<String> = Vec::new();
@@ -582,7 +637,7 @@ async fn query_postgres(client: &tokio_postgres::Client, sql: &str) -> Result<Qu
     return Ok(QueryResult { columns, rows, affected });
 }
 
-fn query_sqlite(connection: &Connection, sql: &str) -> Result<QueryResult, String> {
+pub fn query_sqlite(connection: &Connection, sql: &str) -> Result<QueryResult, String> {
     let mut statement = connection.prepare(sql).map_err(friendly)?;
     let width = statement.column_count();
 
@@ -629,607 +684,7 @@ fn cell_text(value: ValueRef<'_>) -> Option<String> {
     }
 }
 
-pub async fn tables(session: &Session) -> Result<Vec<TableInfo>, String> {
-    match &session.engine {
-        Engine::Postgres(client) => {
-            let result = query_postgres(
-                client,
-                "select c.relname, coalesce(s.n_live_tup, 0)::text
-                 from pg_class c
-                 join pg_namespace n on n.oid = c.relnamespace
-                 left join pg_stat_user_tables s on s.relid = c.oid
-                 where c.relkind = 'r' and n.nspname = 'public'
-                 order by c.relname",
-            )
-            .await?;
 
-            return Ok(result
-                .rows
-                .into_iter()
-                .map(|row| TableInfo {
-                    name: row[0].clone().unwrap_or_default(),
-                    rows: row[1].as_deref().unwrap_or("0").parse().unwrap_or(0),
-                })
-                .collect());
-        }
-        Engine::Sqlite(connection) => {
-            let connection = connection.lock().unwrap();
-            let names = query_sqlite(
-                &connection,
-                "select name from sqlite_master
-                 where type = 'table' and name not like 'sqlite_%'
-                 order by name",
-            )?;
-
-            let mut out = Vec::new();
-
-            for row in names.rows {
-                let name = row[0].clone().unwrap_or_default();
-                let counted = query_sqlite(
-                    &connection,
-                    &format!("select count(*) from {}", quote_ident(&name)),
-                )?;
-                let rows = counted.rows[0][0]
-                    .as_deref()
-                    .unwrap_or("0")
-                    .parse()
-                    .unwrap_or(0);
-
-                out.push(TableInfo { name, rows });
-            }
-
-            return Ok(out);
-        }
-        Engine::MySql(client) => client.tables().await,
-        Engine::Duck(duck) => duck.tables(),
-        Engine::Http(remote) => remote.tables().await,
-        Engine::Driver(driver) => driver.tables().await,
-        Engine::Graph(graph) => graph.tables().await,
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Edit {
-    pub keys: HashMap<String, Option<String>>,
-    pub set: HashMap<String, Option<String>>,
-}
-
-pub async fn apply(
-    session: &Session,
-    table: &str,
-    edits: &[Edit],
-) -> Result<u64, String> {
-    if session.read_only.load(Ordering::Relaxed) {
-        return Err("this session is read only".into());
-    }
-
-    let mut touched = 0;
-
-    for edit in edits {
-        if edit.keys.is_empty() || edit.set.is_empty() {
-            continue;
-        }
-
-        let assignments = edit
-            .set
-            .iter()
-            .map(|(column, value)| {
-                format!("{} = {}", quote_for(session, column), literal(value))
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let conditions = edit
-            .keys
-            .iter()
-            .map(|(column, value)| match value {
-                None => format!("{} is null", quote_for(session, column)),
-                Some(_) => {
-                    format!("{} = {}", quote_for(session, column), literal(value))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" and ");
-
-        let sql = format!(
-            "update {} set {assignments} where {conditions}",
-            quote_for(session, table)
-        );
-
-        let result = query(session, &sql).await?;
-
-        touched += result.affected.unwrap_or(0);
-    }
-
-    return Ok(touched);
-}
-
-pub async fn set_read_only(session: &Session, on: bool) -> Result<(), String> {
-    session.set_read_only(on);
-
-    if let Engine::Postgres(client) = &session.engine {
-        let wish = if on { "read only" } else { "read write" };
-
-        client
-            .batch_execute(&format!(
-                "set session characteristics as transaction {wish}"
-            ))
-            .await
-            .map_err(friendly_pg)?;
-    }
-
-    return Ok(());
-}
-
-pub async fn table_rows(
-    session: &Session,
-    table: &str,
-    limit: u32,
-    offset: u32,
-) -> Result<QueryResult, String> {
-    if let Engine::Driver(driver) = &session.engine {
-        if let Some(script) = driver.rows_query(table, limit) {
-            return query(session, &script).await;
-        }
-    }
-
-    let sql = match &session.engine {
-        Engine::Graph(_) => format!("match (n:{table}) return n limit {limit}"),
-        _ => format!(
-            "select * from {} limit {limit} offset {offset}",
-            quote_ident(table)
-        ),
-    };
-
-    return query(session, &sql).await;
-}
-
-pub async fn schema(session: &Session) -> Result<Vec<TableSchema>, String> {
-    let counts: HashMap<String, i64> = tables(session)
-        .await?
-        .into_iter()
-        .map(|table| (table.name, table.rows))
-        .collect();
-
-    let mut out = match &session.engine {
-        Engine::Postgres(client) => {
-            let mut tables = postgres_schema(client).await?;
-            let notes = postgres_notes(client).await.unwrap_or_default();
-
-            for (table, column, raw) in notes {
-                let (text, hints) = annotation(&raw);
-
-                let Some(found) = tables.iter_mut().find(|entry| entry.name == table)
-                else {
-                    continue;
-                };
-
-                if column.is_empty() {
-                    found.note = text.or(Some(raw));
-                    found.hints = hints;
-                    continue;
-                }
-
-                if let Some(target) =
-                    found.columns.iter_mut().find(|entry| entry.name == column)
-                {
-                    target.note = text.or(Some(raw));
-                    found.hints.extend(hints);
-                }
-            }
-
-            tables
-        }
-        Engine::Sqlite(connection) => sqlite_schema(&connection.lock().unwrap(), &counts)?,
-        Engine::MySql(client) => mysql_schema(client.columns().await?),
-        Engine::Http(remote) if remote.flavour == "supabase_api" => {
-            mysql_schema(remote.columns().await?)
-        }
-        Engine::Duck(duck) => mysql_schema(duck.columns()?),
-        _ => counts
-            .keys()
-            .map(|name| TableSchema {
-                name: name.clone(),
-                rows: 0,
-                columns: Vec::new(),
-                note: None,
-                hints: Vec::new(),
-            })
-            .collect(),
-    };
-
-    for table in &mut out {
-        table.rows = *counts.get(&table.name).unwrap_or(&0);
-    }
-
-    return Ok(out);
-}
-
-async fn postgres_schema(client: &tokio_postgres::Client) -> Result<Vec<TableSchema>, String> {
-    let columns = query_postgres(
-        client,
-        "select table_name, column_name, data_type, is_nullable
-         from information_schema.columns
-         where table_schema = 'public'
-         order by table_name, ordinal_position",
-    )
-    .await?;
-
-    let keys = query_postgres(
-        client,
-        "select tc.constraint_type, kcu.table_name, kcu.column_name,
-                ccu.table_name as target_table, ccu.column_name as target_column
-         from information_schema.table_constraints tc
-         join information_schema.key_column_usage kcu
-           on kcu.constraint_name = tc.constraint_name
-          and kcu.table_schema = tc.table_schema
-         left join information_schema.constraint_column_usage ccu
-           on ccu.constraint_name = tc.constraint_name
-          and ccu.table_schema = tc.table_schema
-         where tc.table_schema = 'public'
-           and tc.constraint_type in ('PRIMARY KEY', 'FOREIGN KEY')",
-    )
-    .await?;
-
-    let mut primary = std::collections::HashSet::new();
-    let mut foreign: HashMap<(String, String), String> = HashMap::new();
-
-    for row in keys.rows {
-        let kind = row[0].clone().unwrap_or_default();
-        let table = row[1].clone().unwrap_or_default();
-        let column = row[2].clone().unwrap_or_default();
-
-        if kind == "PRIMARY KEY" {
-            primary.insert((table, column));
-            continue;
-        }
-
-        let target_table = row[3].clone().unwrap_or_default();
-        let target_column = row[4].clone().unwrap_or_default();
-
-        foreign.insert((table, column), format!("{target_table}.{target_column}"));
-    }
-
-    let mut grouped: Vec<TableSchema> = Vec::new();
-
-    for row in columns.rows {
-        let table = row[0].clone().unwrap_or_default();
-        let name = row[1].clone().unwrap_or_default();
-        let data_type = row[2].clone().unwrap_or_default();
-        let required = row[3].as_deref() == Some("NO");
-
-        if grouped.last().map(|last| last.name != table).unwrap_or(true) {
-            grouped.push(TableSchema {
-                name: table.clone(),
-                rows: 0,
-                columns: Vec::new(),
-                note: None,
-                hints: Vec::new(),
-            });
-        }
-
-        grouped.last_mut().unwrap().columns.push(ColumnInfo {
-            primary_key: primary.contains(&(table.clone(), name.clone())),
-            references: foreign.get(&(table.clone(), name.clone())).cloned(),
-            name,
-            data_type,
-            required,
-            note: None,
-        });
-    }
-
-    return Ok(grouped);
-}
-
-pub fn annotation(raw: &str) -> (Option<String>, Vec<String>) {
-    let Some(start) = raw.find("@gpql:comment") else {
-        return (None, Vec::new());
-    };
-
-    let rest = &raw[start + "@gpql:comment".len()..];
-    let quoted = rest
-        .split_once('"')
-        .and_then(|(_, tail)| tail.split_once('"'))
-        .map(|(body, _)| body.trim().to_string());
-
-    let Some(text) = quoted else {
-        return (None, Vec::new());
-    };
-
-    let hints = text
-        .split_whitespace()
-        .filter_map(|word| word.strip_prefix("@ref"))
-        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '.'))
-        .filter(|word| word.contains('.'))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-
-    let extra = text
-        .split_whitespace()
-        .enumerate()
-        .filter(|(index, word)| {
-            !word.starts_with("@ref")
-                && !(*index > 0 && text.split_whitespace().nth(index - 1) == Some("@ref"))
-        })
-        .map(|(_, word)| word)
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    return (Some(extra.trim().to_string()), hints);
-}
-
-async fn postgres_notes(
-    client: &tokio_postgres::Client,
-) -> Result<Vec<(String, String, String)>, String> {
-    let listing = query_postgres(
-        client,
-        "select c.relname, coalesce(a.attname, ''), d.description
-         from pg_description d
-         join pg_class c on c.oid = d.objoid
-         join pg_namespace n on n.oid = c.relnamespace
-         left join pg_attribute a
-           on a.attrelid = c.oid and a.attnum = d.objsubid
-         where n.nspname = 'public'",
-    )
-    .await?;
-
-    return Ok(listing
-        .rows
-        .into_iter()
-        .map(|row| {
-            (
-                row[0].clone().unwrap_or_default(),
-                row[1].clone().unwrap_or_default(),
-                row[2].clone().unwrap_or_default(),
-            )
-        })
-        .collect());
-}
-
-fn mysql_schema(listing: QueryResult) -> Vec<TableSchema> {
-    let mut grouped: Vec<TableSchema> = Vec::new();
-
-    for row in listing.rows {
-        let cell = |index: usize| row.get(index).cloned().flatten().unwrap_or_default();
-        let table = cell(0);
-
-        if grouped.last().map(|last| last.name != table).unwrap_or(true) {
-            grouped.push(TableSchema {
-                name: table.clone(),
-                rows: 0,
-                columns: Vec::new(),
-                note: None,
-                hints: Vec::new(),
-            });
-        }
-
-        let target = cell(5);
-
-        grouped.last_mut().unwrap().columns.push(ColumnInfo {
-            name: cell(1),
-            data_type: cell(2),
-            required: cell(3) == "NO",
-            primary_key: cell(4) == "PRI",
-            note: None,
-            references: if target.is_empty() {
-                None
-            } else {
-                Some(format!("{target}.{}", cell(6)))
-            },
-        });
-    }
-
-    return grouped;
-}
-
-fn sqlite_schema(
-    connection: &Connection,
-    counts: &HashMap<String, i64>,
-) -> Result<Vec<TableSchema>, String> {
-    let mut names: Vec<&String> = counts.keys().collect();
-    names.sort();
-
-    let mut out = Vec::new();
-
-    for name in names {
-        let info = query_sqlite(
-            connection,
-            &format!("pragma table_info({})", quote_ident(name)),
-        )?;
-        let links = query_sqlite(
-            connection,
-            &format!("pragma foreign_key_list({})", quote_ident(name)),
-        )?;
-
-        let mut foreign: HashMap<String, String> = HashMap::new();
-
-        for row in links.rows {
-            let from = row[3].clone().unwrap_or_default();
-            let target_table = row[2].clone().unwrap_or_default();
-            let target_column = row[4].clone().unwrap_or_else(|| "rowid".into());
-
-            foreign.insert(from, format!("{target_table}.{target_column}"));
-        }
-
-        let columns = info
-            .rows
-            .into_iter()
-            .map(|row| {
-                let column = row[1].clone().unwrap_or_default();
-
-                ColumnInfo {
-                    data_type: row[2].clone().unwrap_or_default().to_lowercase(),
-                    required: row[3].as_deref() == Some("1"),
-                    primary_key: row[5].as_deref().unwrap_or("0") != "0",
-                    references: foreign.get(&column).cloned(),
-                    note: None,
-                    name: column,
-                }
-            })
-            .collect();
-
-        out.push(TableSchema {
-            name: name.clone(),
-            rows: 0,
-            columns,
-            note: None,
-            hints: Vec::new(),
-        });
-    }
-
-    return Ok(out);
-}
-
-pub fn local_postgres_ports() -> Vec<u16> {
-    return (5432..=5435).filter(|port| reachable("127.0.0.1", *port, 120)).collect();
-}
-
-pub fn reachable(host: &str, port: u16, patience: u64) -> bool {
-    use std::net::ToSocketAddrs;
-
-    let Ok(mut addresses) = (host, port).to_socket_addrs() else {
-        return false;
-    };
-
-    return addresses
-        .any(|address| TcpStream::connect_timeout(&address, Duration::from_millis(patience)).is_ok());
-}
-
-fn friendly(error: impl std::fmt::Display) -> String {
-    let text = error.to_string();
-
-    return text
-        .strip_prefix("error connecting to server: ")
-        .unwrap_or(&text)
-        .to_string();
-}
-
-fn friendly_pg(error: tokio_postgres::Error) -> String {
-    if let Some(reported) = error.as_db_error() {
-        return reported.message().to_string();
-    }
-
-    let mut text = error.to_string();
-    let mut cause = std::error::Error::source(&error);
-
-    while let Some(inner) = cause {
-        text = format!("{text}: {inner}");
-        cause = inner.source();
-    }
-
-    return plain_message(&text);
-}
-
-fn plain_message(text: &str) -> String {
-    let known = [
-        ("password missing", "gpql.needs_password"),
-        ("os error 10061", "gpql.no_listener"),
-        ("Connection refused", "gpql.no_listener"),
-        ("os error 10060", "gpql.no_answer"),
-        ("os error 11004", "gpql.ipv6_only"),
-        ("ENOIDENTIFIER", "gpql.needs_tenant"),
-        ("failed to lookup address", "gpql.bad_host"),
-    ];
-
-    for (needle, friendly) in known {
-        if text.contains(needle) {
-            return friendly.to_string();
-        }
-    }
-
-    return text
-        .strip_prefix("error connecting to server: ")
-        .unwrap_or(text)
-        .to_string();
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Discovery {
-    pub host: String,
-    pub port: String,
-    pub user: String,
-    pub password: String,
-    pub database: String,
-    pub needs_login: bool,
-}
-
-pub async fn scan_host(
-    host: &str,
-    ports: &[u16],
-    candidates: &[(String, String)],
-) -> Vec<Discovery> {
-    let mut found = Vec::new();
-
-    for port in ports.iter().copied().filter(|port| reachable(host, *port, 200)) {
-        let mut reached = false;
-
-        for (user, password) in candidates {
-            let probe = SessionConfig {
-                kind: "postgres".into(),
-                host: host.to_string(),
-                port: port.to_string(),
-                user: user.clone(),
-                password: password.clone(),
-                database: "postgres".into(),
-                path: String::new(),
-                warehouse: String::new(),
-                schema: String::new(),
-                read_only: true,
-                tls: "prefer".into(),
-                url: String::new(),
-                token: String::new(),
-            };
-
-            let Ok(session) = open(&probe).await else {
-                continue;
-            };
-            let Ok(result) = query(
-                &session,
-                "select datname from pg_database
-                 where datistemplate = false and datallowconn = true
-                 order by datname",
-            )
-            .await
-            else {
-                continue;
-            };
-
-            reached = true;
-
-            for row in result.rows {
-                found.push(Discovery {
-                    host: host.to_string(),
-                    port: port.to_string(),
-                    user: user.clone(),
-                    password: password.clone(),
-                    database: row[0].clone().unwrap_or_default(),
-                    needs_login: false,
-                });
-            }
-
-            break;
-        }
-
-        if !reached {
-            found.push(Discovery {
-                host: host.to_string(),
-                port: port.to_string(),
-                user: candidates
-                    .first()
-                    .map(|(user, _)| user.clone())
-                    .unwrap_or_else(|| "postgres".into()),
-                password: String::new(),
-                database: String::new(),
-                needs_login: true,
-            });
-        }
-    }
-
-    return found;
-}
-
-pub async fn scan(candidates: &[(String, String)]) -> Vec<Discovery> {
-    return scan_host("127.0.0.1", &[5432, 5433, 5434, 5435], candidates).await;
-}
+#[cfg(test)]
+#[path = "db_tests.rs"]
+mod db_tests;

@@ -5,20 +5,29 @@ mod store;
 
 use crate::engines::backends;
 use crate::engines::db;
+use crate::engines::discovery;
+use crate::engines::ddl;
+use crate::engines::export;
+use crate::engines::objects;
+use crate::engines::plan;
 use crate::editor::highlight;
 use crate::editor::lsp;
 use crate::store::local;
 use crate::store::vault;
 use crate::net::login;
 use crate::net::tailnet;
+use crate::net::tunnel::{self, Tunnels};
 
+use crate::engines::introspect;
+use crate::engines::slicing;
+use crate::engines::writing;
 use db::{
-    Discovery, Edit, QueryResult, SessionConfig, SessionHandle, Sessions, TableInfo,
-    TableSchema,
+    QueryResult, SessionConfig, SessionHandle, Sessions, TableInfo, TableSchema,
 };
+use discovery::Discovery;
 use highlight::{Highlighter, Token};
 use local::Local;
-use lsp::{Completion, Diagnostic, Servers};
+use lsp::{Completion, Servers};
 use serde_json::Value as Json;
 use tauri::State;
 use vault::{Credential, Provider, SavedLogin};
@@ -31,7 +40,7 @@ async fn check(config: SessionConfig) -> Result<String, String> {
         ("sqlite", _) => "select 'sqlite ' || sqlite_version()",
         (_, "cypher") => "return 1",
         (_, "flux") => {
-            let listed = db::tables(&session).await?;
+            let listed = introspect::tables(&session).await?;
 
             return Ok(format!("{} buckets", listed.len()));
         }
@@ -103,7 +112,7 @@ async fn probe_recents(items: Vec<Waypoint>) -> Vec<String> {
                 String::new()
             }
             Some(Look::Port(host, port)) => {
-                if db::reachable(&host, port, 400) {
+                if discovery::reachable(&host, port, 400) {
                     String::new()
                 } else {
                     "down".to_string()
@@ -227,23 +236,150 @@ async fn supabase_projects(token: &str) -> Result<Vec<String>, String> {
 async fn connect(
     config: SessionConfig,
     sessions: State<'_, Sessions>,
+    tunnels: State<'_, Tunnels>,
 ) -> Result<SessionHandle, String> {
-    let session = db::open(&config).await?;
+    // the driver is pointed at a loopback port and never learns there is a
+    // jump host in front of the server
+    let (reached, hop) = if config.tunnel.wanted() {
+        let target = if config.host.trim().is_empty() {
+            "127.0.0.1"
+        } else {
+            config.host.trim()
+        };
+        let port = config.port.trim().parse().unwrap_or(5432);
+        let hop = tunnel::open(&tunnels, &config.tunnel, target, port).await?;
+
+        let mut through = config.clone();
+
+        through.host = "127.0.0.1".into();
+        through.port = hop.local_port.to_string();
+
+        (through, Some(hop))
+    } else {
+        (config.clone(), None)
+    };
+
+    let session = db::open(&reached).await?;
+
     vault::remember(&config)?;
 
-    return Ok(sessions.insert(session));
+    let handle = sessions.insert(session);
+
+    if let Some(hop) = hop {
+        tunnels.keep(&handle.id, hop);
+    }
+
+    return Ok(handle);
 }
 
 #[tauri::command]
-fn disconnect(id: String, sessions: State<'_, Sessions>) {
+async fn disconnect(
+    id: String,
+    sessions: State<'_, Sessions>,
+    tunnels: State<'_, Tunnels>,
+) -> Result<(), String> {
+    // an uncommitted transaction would otherwise hold locks until the server
+    // notices the socket is gone
+    if let Ok(session) = sessions.get(&id) {
+        let _ = writing::finish(&session, "rollback").await;
+    }
+
     sessions.remove(&id);
+    tunnels.drop_for(&id);
+
+    return Ok(());
+}
+
+#[tauri::command]
+async fn export_table(
+    id: String,
+    table: String,
+    slice: slicing::Slice,
+    format: export::Format,
+    path: String,
+    sessions: State<'_, Sessions>,
+) -> Result<u64, String> {
+    let session = sessions.get(&id)?;
+
+    return export::export_table(&session, &table, &slice, format, &path).await;
+}
+
+#[tauri::command]
+async fn export_result(
+    id: String,
+    result: db::QueryResult,
+    table: String,
+    format: export::Format,
+    path: String,
+    sessions: State<'_, Sessions>,
+) -> Result<u64, String> {
+    let session = sessions.get(&id)?;
+
+    return export::export_result(&session, &result, &table, format, &path);
+}
+
+#[tauri::command]
+async fn objects(
+    id: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<objects::DbObject>, String> {
+    let session = sessions.get(&id)?;
+
+    return objects::objects(&session).await;
+}
+
+#[tauri::command]
+async fn table_ddl(
+    id: String,
+    table: String,
+    sessions: State<'_, Sessions>,
+) -> Result<String, String> {
+    let session = sessions.get(&id)?;
+
+    return ddl::table_ddl(&session, &table).await;
+}
+
+#[tauri::command]
+async fn explain_query(
+    id: String,
+    sql: String,
+    analyze: bool,
+    sessions: State<'_, Sessions>,
+) -> Result<plan::Plan, String> {
+    let session = sessions.get(&id)?;
+
+    return plan::explain(&session, &sql, analyze).await;
+}
+
+#[tauri::command]
+fn reset_sessions(sessions: State<'_, Sessions>, tunnels: State<'_, Tunnels>) {
+    sessions.clear();
+    tunnels.clear();
 }
 
 #[tauri::command]
 async fn tables(id: String, sessions: State<'_, Sessions>) -> Result<Vec<TableInfo>, String> {
     let session = sessions.get(&id)?;
 
-    return db::tables(&session).await;
+    return introspect::tables(&session).await;
+}
+
+#[tauri::command]
+async fn schemas(id: String, sessions: State<'_, Sessions>) -> Result<Vec<String>, String> {
+    let session = sessions.get(&id)?;
+
+    return introspect::schemas(&session).await;
+}
+
+#[tauri::command]
+async fn use_schema(
+    id: String,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    return introspect::use_schema(&session, &name).await;
 }
 
 #[tauri::command]
@@ -256,6 +392,40 @@ fn check_sql(
 }
 
 #[tauri::command]
+async fn set_manual(
+    id: String,
+    on: bool,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    return writing::set_manual(&session, on).await;
+}
+
+#[tauri::command]
+async fn end_transaction(
+    id: String,
+    commit: bool,
+    sessions: State<'_, Sessions>,
+) -> Result<bool, String> {
+    let session = sessions.get(&id)?;
+
+    return writing::finish(&session, if commit { "commit" } else { "rollback" }).await;
+}
+
+#[tauri::command]
+fn pending_edits(
+    id: String,
+    table: String,
+    edits: Vec<writing::Edit>,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<String>, String> {
+    let session = sessions.get(&id)?;
+
+    return Ok(writing::edit_statements(&session, &table, &edits));
+}
+
+#[tauri::command]
 async fn set_read_only(
     id: String,
     on: bool,
@@ -263,20 +433,19 @@ async fn set_read_only(
 ) -> Result<(), String> {
     let session = sessions.get(&id)?;
 
-    return db::set_read_only(&session, on).await;
+    return writing::set_read_only(&session, on).await;
 }
 
 #[tauri::command]
 async fn table_rows(
     id: String,
     table: String,
-    limit: u32,
-    offset: u32,
+    slice: slicing::Slice,
     sessions: State<'_, Sessions>,
 ) -> Result<QueryResult, String> {
     let session = sessions.get(&id)?;
 
-    return db::table_rows(&session, &table, limit, offset).await;
+    return slicing::table_rows(&session, &table, &slice).await;
 }
 
 #[tauri::command]
@@ -294,19 +463,19 @@ async fn run_query(
 async fn apply_edits(
     id: String,
     table: String,
-    edits: Vec<Edit>,
+    edits: Vec<writing::Edit>,
     sessions: State<'_, Sessions>,
 ) -> Result<u64, String> {
     let session = sessions.get(&id)?;
 
-    return db::apply(&session, &table, &edits).await;
+    return writing::apply(&session, &table, &edits).await;
 }
 
 #[tauri::command]
 async fn schema(id: String, sessions: State<'_, Sessions>) -> Result<Vec<TableSchema>, String> {
     let session = sessions.get(&id)?;
 
-    return db::schema(&session).await;
+    return introspect::schema(&session).await;
 }
 
 #[tauri::command]
@@ -354,14 +523,6 @@ async fn lsp_complete(
 }
 
 #[tauri::command]
-async fn lsp_diagnostics(
-    dialect: String,
-    servers: State<'_, Servers>,
-) -> Result<Vec<Diagnostic>, String> {
-    return Ok(servers.diagnostics(&dialect).await);
-}
-
-#[tauri::command]
 fn read_document(path: String) -> Result<String, String> {
     return std::fs::read_to_string(&path).map_err(|e| e.to_string());
 }
@@ -402,7 +563,7 @@ fn set_acrylic(window: tauri::Window, on: bool, dark: bool) -> Result<(), String
 
 #[tauri::command]
 fn look_on_this_machine() -> Vec<u16> {
-    return db::local_postgres_ports();
+    return discovery::local_postgres_ports();
 }
 
 fn probe_credentials() -> Vec<(String, String)> {
@@ -424,7 +585,7 @@ fn probe_credentials() -> Vec<(String, String)> {
 
 #[tauri::command]
 async fn scan_local() -> Vec<Discovery> {
-    return db::scan(&probe_credentials()).await;
+    return discovery::scan(&probe_credentials()).await;
 }
 
 #[tauri::command]
@@ -433,7 +594,7 @@ async fn scan_tailnet() -> Vec<Discovery> {
     let mut found = Vec::new();
 
     for peer in tailnet::peers().into_iter().filter(|peer| peer.online) {
-        found.extend(db::scan_host(&peer.host, &[5432, 5433], &candidates).await);
+        found.extend(discovery::scan_host(&peer.host, &[5432, 5433], &candidates).await);
     }
 
     return found;
@@ -448,7 +609,7 @@ async fn publish_schema(
 ) -> Result<String, String> {
     let token = vault::account_token().ok_or_else(|| "sign in first".to_string())?;
     let session = sessions.get(&session_id)?;
-    let tables = db::schema(&session).await?;
+    let tables = introspect::schema(&session).await?;
 
     let answer: serde_json::Value = reqwest::Client::new()
         .post(format!("{}/api/erd", site.trim_end_matches('/')))
@@ -695,6 +856,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Sessions::default())
+        .manage(Tunnels::default())
         .manage(Local::open().expect("gpql could not open its local database"))
         .manage(Highlighter::new().expect("gpql could not load its SQL grammar"))
         .manage(Servers::default())
@@ -705,9 +867,20 @@ pub fn run() {
             databases,
             connect,
             disconnect,
+            reset_sessions,
+            objects,
+            table_ddl,
+            explain_query,
+            export_table,
+            export_result,
             tables,
+            schemas,
+            use_schema,
             table_rows,
             set_read_only,
+            set_manual,
+            end_transaction,
+            pending_edits,
             run_query,
             schema,
             apply_edits,
@@ -717,7 +890,6 @@ pub fn run() {
             lsp_stop,
             lsp_running,
             lsp_complete,
-            lsp_diagnostics,
             set_acrylic,
             read_document,
             write_document,

@@ -1,6 +1,15 @@
 pub mod backends;
 pub mod db;
+pub mod ddl;
+pub mod discovery;
 pub mod drivers;
+pub mod errors;
+pub mod introspect;
+pub mod export;
+pub mod plan;
+pub mod slicing;
+pub mod writing;
 pub mod duck;
 pub mod mysql;
+pub mod objects;
 pub mod remote;

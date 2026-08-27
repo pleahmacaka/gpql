@@ -35,7 +35,7 @@ sha2 = "0.10.9"
 base64 = "0.23.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-postgres-rustls = "0.14.0"
-rustls = "0.23.43"
+rustls = { version = "0.23.43", features = ["ring"] }
 webpki-roots = "1.0.9"
 redis = { version = "0.32.2", default-features = false, features = ["tokio-comp"] }
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls-no-provider"] }
@@ -52,6 +52,9 @@ influxdb3-client = "0.2"
 influxdb2 = "0.5"
 influxdb2-structmap = "0.2"
 arrow-cast = { version = "57", default-features = false }
+csv = "1.4.0"
+russh = "0.45"
+async-trait = "0.1.92"
 
 [target."cfg(windows)".dependencies]
 windows = { version = "0.61.3", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }

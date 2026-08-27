@@ -21,24 +21,12 @@ pub struct Completion {
     pub kind: i64,
 }
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Diagnostic {
-    pub line: u32,
-    pub character: u32,
-    pub end_line: u32,
-    pub end_character: u32,
-    pub message: String,
-    pub severity: i64,
-}
-
 struct Server {
     child: Child,
     stdin: ChildStdin,
     next: AtomicI64,
     version: AtomicI64,
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
-    reported: Arc<Mutex<Vec<Diagnostic>>>,
 }
 
 #[derive(Default)]
@@ -71,9 +59,7 @@ impl Servers {
 
         let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let reported: Arc<Mutex<Vec<Diagnostic>>> = Arc::new(Mutex::new(Vec::new()));
-
-        listen(stdout, pending.clone(), reported.clone());
+        listen(stdout, pending.clone());
 
         let mut server = Server {
             child,
@@ -81,7 +67,6 @@ impl Servers {
             next: AtomicI64::new(1),
             version: AtomicI64::new(1),
             pending,
-            reported,
         };
 
         server
@@ -93,7 +78,6 @@ impl Servers {
                     "capabilities": {
                         "textDocument": {
                             "completion": { "completionItem": { "snippetSupport": false } },
-                            "publishDiagnostics": {},
                         }
                     },
                 }),
@@ -193,15 +177,6 @@ impl Servers {
             .take(50)
             .collect());
     }
-
-    pub async fn diagnostics(&self, dialect: &str) -> Vec<Diagnostic> {
-        let running = self.running.lock().await;
-        let Some(server) = running.get(dialect) else {
-            return Vec::new();
-        };
-
-        return server.reported.lock().await.clone();
-    }
 }
 
 impl Server {
@@ -251,7 +226,6 @@ impl Server {
 fn listen(
     stdout: tokio::process::ChildStdout,
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
-    reported: Arc<Mutex<Vec<Diagnostic>>>,
 ) {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout);
@@ -298,32 +272,7 @@ fn listen(
 
                 continue;
             }
-
-            if message.get("method").and_then(Value::as_str)
-                == Some("textDocument/publishDiagnostics")
-            {
-                let found = message
-                    .pointer("/params/diagnostics")
-                    .and_then(Value::as_array)
-                    .map(|items| items.iter().filter_map(shape).collect::<Vec<_>>())
-                    .unwrap_or_default();
-
-                *reported.lock().await = found;
-            }
         }
     });
 }
 
-fn shape(item: &Value) -> Option<Diagnostic> {
-    let range = item.get("range")?;
-    let at = |path: &str| range.pointer(path).and_then(Value::as_u64).unwrap_or(0) as u32;
-
-    return Some(Diagnostic {
-        line: at("/start/line"),
-        character: at("/start/character"),
-        end_line: at("/end/line"),
-        end_character: at("/end/character"),
-        message: item.get("message")?.as_str()?.to_string(),
-        severity: item.get("severity").and_then(Value::as_i64).unwrap_or(1),
-    });
-}
