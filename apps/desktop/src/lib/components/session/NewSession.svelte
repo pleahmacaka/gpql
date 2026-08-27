@@ -41,6 +41,11 @@
       .every(field => String(config[field.key] ?? "").trim() !== ""),
   )
 
+  // a jump host only makes sense when the driver dials a host and port
+  let overHost = $derived(
+    (backend?.fields ?? []).some(field => field.key === "host"),
+  )
+
   let wantsDatabase = $derived(
     (backend?.fields ?? []).some(field => field.key === "database"),
   )
@@ -155,6 +160,14 @@
     }
   }
 
+  async function pickKey() {
+    const picked = await open({ multiple: false, directory: false })
+
+    if (typeof picked === "string" && config.tunnel) {
+      config.tunnel.keyPath = picked
+    }
+  }
+
   async function keep() {
     try {
       await workspace.keepConnection(config)
@@ -184,6 +197,8 @@
   onkeep={keep}
   ontoggleReadOnly={() => workspace.toggle("readOnly")}
   onbrowse={pickFile}
+  onbrowseKey={pickKey}
+  tunnelled={overHost}
   databases={catalogue}
   labels={{
     database: m.field_database(),
@@ -199,5 +214,11 @@
     tlsVerify: m.tls_verify(),
     tlsRequire: m.tls_require(),
     tlsOff: m.tls_off(),
+    tunnel: m.tunnel(),
+    tunnelHost: m.tunnel_host(),
+    tunnelUser: m.tunnel_user(),
+    tunnelKey: m.tunnel_key(),
+    tunnelPassword: m.tunnel_password(),
+    tunnelPassphrase: m.tunnel_passphrase(),
   }}
 />

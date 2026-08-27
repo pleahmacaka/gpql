@@ -21,6 +21,8 @@
     onkeep?: () => void
     ontoggleReadOnly?: () => void
     onbrowse?: () => void
+    onbrowseKey?: () => void
+    tunnelled?: boolean
     labels?: Partial<Record<
       | "database"
       | "credentials"
@@ -34,7 +36,13 @@
       | "tlsAuto"
       | "tlsVerify"
       | "tlsRequire"
-      | "tlsOff",
+      | "tlsOff"
+      | "tunnel"
+      | "tunnelHost"
+      | "tunnelUser"
+      | "tunnelKey"
+      | "tunnelPassword"
+      | "tunnelPassphrase",
       string
     >>
   }
@@ -51,8 +59,24 @@
     onkeep,
     ontoggleReadOnly,
     onbrowse,
+    onbrowseKey,
+    tunnelled = false,
     labels = {},
   }: Props = $props()
+
+  // the draft carries the hop so it saves and reloads with the connection
+  let hop = $derived(
+    (draft.tunnel ??= {
+      host: "",
+      port: "",
+      user: "",
+      password: "",
+      keyPath: "",
+      passphrase: "",
+    }),
+  )
+
+  let hopOpen = $derived(hop.host !== "")
 
   let words = $derived({
     database: labels.database ?? "Database",
@@ -68,6 +92,12 @@
     tlsVerify: labels.tlsVerify ?? "Verify certificate",
     tlsRequire: labels.tlsRequire ?? "Encrypt only",
     tlsOff: labels.tlsOff ?? "Off",
+    tunnel: labels.tunnel ?? "SSH tunnel",
+    tunnelHost: labels.tunnelHost ?? "Jump host",
+    tunnelUser: labels.tunnelUser ?? "SSH user",
+    tunnelKey: labels.tunnelKey ?? "Private key",
+    tunnelPassword: labels.tunnelPassword ?? "SSH password",
+    tunnelPassphrase: labels.tunnelPassphrase ?? "Key passphrase",
   })
 
   let backend = $derived(
@@ -260,6 +290,66 @@
       />
     {/if}
   {/each}
+
+  {#if tunnelled}
+    <details class="rounded-field bg-base-200 px-3 py-2" open={hopOpen}>
+      <summary class="cursor-pointer text-xs text-base-content/60">
+        {words.tunnel}{hop.host ? ` · ${hop.host}` : ""}
+      </summary>
+
+      <div class="space-y-2 pt-2">
+        <div class="flex gap-2">
+          <div class="flex-1">
+            <Field
+              label={words.tunnelHost}
+              placeholder="jump.example.com"
+              value={hop.host}
+              oninput={value => (hop.host = value)}
+            />
+          </div>
+
+          <div class="w-24">
+            <Field label="Port" placeholder="22" value={hop.port} oninput={value => (hop.port = value)} />
+          </div>
+        </div>
+
+        <Field
+          label={words.tunnelUser}
+          value={hop.user}
+          oninput={value => (hop.user = value)}
+        />
+
+        <div class="flex gap-2">
+          <div class="flex-1">
+            <Field
+              label={words.tunnelKey}
+              placeholder="~/.ssh/id_ed25519"
+              value={hop.keyPath}
+              oninput={value => (hop.keyPath = value)}
+            />
+          </div>
+
+          {#if onbrowseKey}
+            <button
+              type="button"
+              onclick={() => onbrowseKey?.()}
+              class="rounded-field bg-base-300 px-3 text-xs"
+            >
+              {words.browse}
+            </button>
+          {/if}
+        </div>
+
+        <Field
+          label={hop.keyPath ? words.tunnelPassphrase : words.tunnelPassword}
+          type="password"
+          value={hop.keyPath ? hop.passphrase : hop.password}
+          oninput={value =>
+            hop.keyPath ? (hop.passphrase = value) : (hop.password = value)}
+        />
+      </div>
+    </details>
+  {/if}
 
   {#if probe.text}
     <p class="flex items-center gap-2 px-1 pt-1 text-xs">
