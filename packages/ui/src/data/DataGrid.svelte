@@ -2,8 +2,10 @@
   import { createVirtualizer } from "@tanstack/svelte-virtual"
   import { untrack } from "svelte"
 
-  import ContextMenu from "../controls/ContextMenu.svelte"
   import Dropdown from "../controls/Dropdown.svelte"
+  import { drag } from "../controls/drag"
+  import { menu, type MenuItem } from "../controls/menu.svelte"
+  import { tooltip } from "../controls/tooltip"
   import { Icon } from "../icons"
 
   export type CellEdit = {
@@ -12,6 +14,7 @@
   }
 
   type Filter = { op: string; value: string }
+  export type Sort = { column: string; dir: "asc" | "desc" }
 
   type Props = {
     columns: string[]
@@ -27,6 +30,13 @@
     needle?: string
     onapply?: (edits: CellEdit[]) => Promise<void> | void
     onblocked?: () => void
+    onsort?: (sort: Sort | null) => void
+    onfilter?: (filters: Record<string, Filter>) => void
+    onmore?: () => void
+    onjump?: (column: string, value: string) => void
+    references?: Record<string, string>
+    paging?: boolean
+    more?: boolean
     labels?: Partial<
       Record<
         | "copyCell"
@@ -38,6 +48,9 @@
         | "apply"
         | "discard"
         | "edited"
+        | "copyAll"
+        | "inspect"
+        | "jumpTo"
         | "noKey"
         | "value"
         | "loading",
@@ -60,13 +73,27 @@
     needle = "",
     onapply,
     onblocked,
+    onsort,
+    onfilter,
+    onmore,
+    onjump,
+    references = {},
+    paging = false,
+    more = false,
     labels = {},
   }: Props = $props()
+
+  // when the parent slices server-side it owns ordering and filtering, so
+  // ranking the loaded page here would answer a different question
+  let remote = $derived(!!onsort || !!onfilter)
 
   let words = $derived({
     copyCell: labels.copyCell ?? "Copy cell",
     copyRow: labels.copyRow ?? "Copy row",
     copyColumn: labels.copyColumn ?? "Copy column name",
+    copyAll: labels.copyAll ?? "Copy loaded rows",
+    inspect: labels.inspect ?? "Open value",
+    jumpTo: labels.jumpTo ?? "Go to",
     filterBy: labels.filterBy ?? "Filter by this value",
     clearFilters: labels.clearFilters ?? "Clear filters",
     contains: labels.contains ?? "contains",
@@ -77,6 +104,12 @@
     value: labels.value ?? "value",
     loading: labels.loading ?? "reading rows",
   })
+
+  const DIRECTIONS = ["asc", "desc"] as const
+
+  const FILTER_DELAY = 250
+
+  const PAGE_MARGIN = 24
 
   const OPERATORS = [
     { id: "contains", label: "contains", needsValue: true },
@@ -98,18 +131,14 @@
   let viewport = $state<HTMLDivElement | null>(null)
   let widths = $state<Record<string, number>>({})
   let filters = $state<Record<string, Filter>>({})
-  let sort = $state<{ column: string; dir: "asc" | "desc" } | null>(null)
+  let sort = $state<Sort | null>(null)
   let openFilter = $state<string | null>(null)
   let cursor = $state<{ row: number; column: number } | null>(null)
   let editing = $state<{ row: number; column: number; draft: string } | null>(
     null,
   )
   let staged = $state<Record<string, string | null>>({})
-  let menu = $state<{
-    x: number
-    y: number
-    items: { label: string; icon?: string; danger?: boolean; run: () => void }[]
-  } | null>(null)
+  let detail = $state<{ column: string; value: string } | null>(null)
 
 
   let active = $derived(
@@ -118,10 +147,42 @@
     ),
   )
 
+  let reported = $state(false)
+
+  $effect(() => {
+    const next = sort
+
+    if (!untrack(() => reported)) {
+      return
+    }
+
+    untrack(() => onsort?.(next ? { ...next } : null))
+  })
+
+  $effect(() => {
+    const next = $state.snapshot(filters) as Record<string, Filter>
+
+    if (!untrack(() => reported)) {
+      return
+    }
+
+    const timer = setTimeout(() => onfilter?.(next), FILTER_DELAY)
+
+    return () => clearTimeout(timer)
+  })
+
+  $effect(() => {
+    reported = true
+  })
+
   let dirty = $derived(Object.keys(staged).length)
   let writable = $derived(editable && keyColumns.length > 0)
 
   let shown = $derived.by(() => {
+    if (remote) {
+      return rows
+    }
+
     const active = Object.entries(filters).filter(
       ([, filter]) => filter.value !== "" || !needsValue(filter.op),
     )
@@ -161,6 +222,7 @@
     return a.localeCompare(b)
   }
 
+
   function toggleSort(name: string) {
     if (sort?.column !== name) {
       sort = { column: name, dir: "asc" }
@@ -170,7 +232,6 @@
       sort = null
     }
   }
-
 
   const needsValue = (op: string) =>
     OPERATORS.find(entry => entry.id === op)?.needsValue ?? true
@@ -305,18 +366,8 @@
     }
 
     dragging = true
-    map.setPointerCapture(event.pointerId)
     walk(event)
-
-    const done = () => {
-      dragging = false
-      map.releasePointerCapture(event.pointerId)
-      window.removeEventListener("pointermove", walk)
-      window.removeEventListener("pointerup", done)
-    }
-
-    window.addEventListener("pointermove", walk)
-    window.addEventListener("pointerup", done)
+    drag(event, walk, () => (dragging = false))
   }
 
   $effect(() => {
@@ -348,6 +399,19 @@
       })
       $rowScroller.measure()
     })
+  })
+
+  $effect(() => {
+    const items = $rowScroller.getVirtualItems()
+    const last = items[items.length - 1]
+
+    if (!last || !more || paging || !onmore) {
+      return
+    }
+
+    if (last.index >= shown.length - PAGE_MARGIN) {
+      untrack(() => onmore())
+    }
   })
 
   $effect(() => {
@@ -407,26 +471,41 @@
   }
 
   function startResize(event: PointerEvent, name: string) {
-    event.preventDefault()
     event.stopPropagation()
 
     const startX = event.clientX
     const startWidth = widthOf(name)
 
-    const move = (moved: PointerEvent) => {
+    drag(event, moved => {
       widths = {
         ...widths,
         [name]: Math.max(MIN_WIDTH, startWidth + moved.clientX - startX),
       }
+    })
+  }
+
+  const TAB = "\t"
+
+  function delimited() {
+    const line = (cells: (string | null)[]) =>
+      cells.map(cell => cell ?? "null").join(TAB)
+
+    return [line(columns), ...shown.map(line)].join("\n")
+  }
+
+  // json and xml are the values worth widening a panel for, so lay them out
+  function pretty(value: string) {
+    const trimmed = value.trim()
+
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+      return value
     }
 
-    const done = () => {
-      window.removeEventListener("pointermove", move)
-      window.removeEventListener("pointerup", done)
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2)
+    } catch {
+      return value
     }
-
-    window.addEventListener("pointermove", move)
-    window.addEventListener("pointerup", done)
   }
 
   function copy(text: string) {
@@ -442,7 +521,7 @@
     const name = columns[column]
     const cell = cellOf(row, column) ?? ""
 
-    const items = [
+    const items: MenuItem[] = [
       { label: words.copyCell, icon: "lucide:copy", run: () => copy(cell) },
       {
         label: words.copyRow,
@@ -459,6 +538,25 @@
         icon: "lucide:columns-3",
         run: () => copy(name),
       },
+      {
+        label: words.copyAll,
+        icon: "lucide:clipboard-list",
+        run: () => copy(delimited()),
+      },
+      {
+        label: words.inspect,
+        icon: "lucide:maximize-2",
+        run: () => (detail = { column: name, value: cell }),
+      },
+      ...(onjump && references[name] && cell !== "null"
+        ? [
+            {
+              label: `${words.jumpTo} ${references[name]}`,
+              icon: "lucide:arrow-right-to-line",
+              run: () => onjump(name, cell),
+            },
+          ]
+        : []),
       {
         label: words.filterBy,
         icon: "lucide:filter",
@@ -477,7 +575,7 @@
       },
     ]
 
-    menu = { x: event.clientX, y: event.clientY, items }
+    menu.show(event, items)
   }
 
   function wheel(event: WheelEvent) {
@@ -499,16 +597,65 @@
     return OPERATORS.find(entry => entry.id === op)?.label ?? op
   }
 
+  function headerTip(name: string) {
+    const lines = [name]
+
+    if (types[name]) {
+      lines.push(types[name])
+    }
+
+    const filter = filters[name]
+
+    if (filter && (filter.value !== "" || !needsValue(filter.op))) {
+      lines.push(
+        `${labelOf(filter.op)} ${needsValue(filter.op) ? filter.value : ""}`.trim(),
+      )
+    }
+
+    if (sort?.column === name) {
+      lines.push(sort.dir === "asc" ? "↑ asc" : "↓ desc")
+    }
+
+    return lines.join("\n")
+  }
+
+  let tips = $derived(
+    Object.fromEntries(columns.map(name => [name, headerTip(name)])),
+  )
+
+  function activeOn(name: string) {
+    const filter = filters[name]
+
+    return !!filter && (filter.value !== "" || !needsValue(filter.op))
+  }
+
+  function closeFilter() {
+    if (openFilter && !activeOn(openFilter)) {
+      const next = { ...filters }
+
+      delete next[openFilter]
+      filters = next
+    }
+
+    openFilter = null
+  }
+
   function toggleFilter(name: string) {
     if (!filterable) {
       return
     }
 
-    if (!filters[name]) {
-      filters = { ...filters, [name]: { op: "contains", value: "" } }
-    }
+    const closing = openFilter === name
 
-    openFilter = openFilter === name ? null : name
+    closeFilter()
+
+    if (!closing) {
+      if (!filters[name]) {
+        filters = { ...filters, [name]: { op: "contains", value: "" } }
+      }
+
+      openFilter = name
+    }
   }
 
   function setFilter(name: string, patch: Partial<Filter>) {
@@ -804,26 +951,29 @@
     select-none"
 >
   <div
-    class="sticky top-0 z-20 bg-base-100"
+    class="sticky top-0 z-20 floating"
     style:width="{$columnScroller.getTotalSize()}px"
   >
-    <div class="relative h-6">
+    <div class="relative h-8">
       {#each $columnScroller.getVirtualItems() as column (column.key)}
         {@const name = columns[column.index]}
 
         <div
-          class="absolute top-0 flex h-6 items-center"
+          class="absolute top-0 flex h-8 items-center"
           style:left="{column.start}px"
           style:width="{column.size}px"
         >
           <button
             type="button"
             onclick={() => toggleFilter(name)}
-            class="flex min-w-0 flex-1 items-center gap-1 px-4 text-left text-xs
-              hover:text-base-content
-              {filters[name] ? 'text-primary' : 'text-base-content/45'}"
+            use:tooltip={tips[name]}
+            class="flex h-full min-w-0 flex-1 items-center gap-1 px-4 text-left
+              text-xs hover:text-base-content
+              {activeOn(name) || sort?.column === name
+                ? 'bg-primary/10 text-primary'
+                : 'text-base-content/45'}"
           >
-            <span class="truncate" title={name}>{name}</span>
+            <span class="truncate">{name}</span>
 
             {#if types[name]}
               <span class="truncate text-base-content/30 lowercase">
@@ -835,9 +985,10 @@
               <Icon icon="lucide:key-round" class="size-3 shrink-0 text-accent" />
             {/if}
 
-            {#if filters[name]}
+            {#if activeOn(name)}
               <Icon icon="lucide:filter" class="size-3 shrink-0" />
             {/if}
+
           </button>
 
           <button
@@ -864,7 +1015,7 @@
             aria-label="Resize {name}"
             onpointerdown={event => startResize(event, name)}
             ondblclick={() => autoFit(name)}
-            class="h-6 w-1 shrink-0 cursor-col-resize bg-transparent
+            class="h-8 w-1 shrink-0 cursor-col-resize bg-transparent
               hover:bg-primary/40"
           ></button>
         </div>
@@ -876,12 +1027,13 @@
         .getVirtualItems()
         .find(column => columns[column.index] === openFilter)}
       {@const current = filters[openFilter] ?? { op: "contains", value: "" }}
+      {@const target = openFilter}
 
       {#if anchor}
         <div
           class="absolute z-30 w-72 rounded-box floating p-3 lift"
           style:left="{Math.max(anchor.start - 8, 0)}px"
-          style:top="1.75rem"
+          style:top="2.25rem"
         >
           <div class="flex items-center gap-2 pb-2">
             <Icon icon="lucide:filter" class="size-3.5 text-base-content/40" />
@@ -893,7 +1045,7 @@
             <button
               type="button"
               aria-label="close"
-              onclick={() => (openFilter = null)}
+              onclick={closeFilter}
               class="rounded-selector p-0.5 text-base-content/35
                 hover:text-base-content"
             >
@@ -933,7 +1085,7 @@
                 onkeydown={event => {
                   if (event.key === "Escape" || event.key === "Enter") {
                     event.stopPropagation()
-                    openFilter = null
+                    closeFilter()
                   }
                 }}
                 placeholder={words.value}
@@ -941,6 +1093,36 @@
                   outline-none select-text placeholder:text-base-content/30"
               />
             {/if}
+          </div>
+
+          <div class="flex items-center gap-1 pt-2">
+            <Icon
+              icon="lucide:arrow-up-down"
+              class="size-3.5 text-base-content/40"
+            />
+
+            {#each DIRECTIONS as dir (dir)}
+              {@const chosen =
+                sort?.column === openFilter && sort.dir === dir}
+
+              <button
+                type="button"
+                aria-pressed={chosen}
+                onclick={() => {
+                  sort = chosen ? null : { column: target, dir }
+                }}
+                class="flex items-center gap-1 rounded-selector px-2 py-0.5
+                  text-xs {chosen
+                  ? 'bg-primary text-primary-content'
+                  : 'bg-base-200 hover:bg-base-300'}"
+              >
+                <Icon
+                  icon={dir === "asc" ? "lucide:arrow-up" : "lucide:arrow-down"}
+                  class="size-3"
+                />
+                {dir}
+              </button>
+            {/each}
           </div>
 
           <div class="flex items-center justify-between pt-3">
@@ -954,7 +1136,7 @@
 
             <button
               type="button"
-              onclick={() => (openFilter = null)}
+              onclick={closeFilter}
               class="rounded-field bg-primary px-3 py-1 text-xs
                 text-primary-content"
             >
@@ -1053,17 +1235,52 @@
     {/each}
   </div>
 
-  {#if menu}
-    <ContextMenu
-      x={menu.x}
-      y={menu.y}
-      items={menu.items}
-      onclose={() => (menu = null)}
-    />
-  {/if}
 </div>
 
-  {#if busy}
+  {#if detail}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      onclick={() => (detail = null)}
+      class="absolute inset-0 z-50 grid place-items-center bg-base-300/45 p-6"
+    >
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        onclick={event => event.stopPropagation()}
+        class="flex max-h-full w-full max-w-2xl flex-col rounded-box floating lift"
+      >
+        <header class="flex items-center gap-2 px-4 pt-3 pb-2">
+          <h3 class="min-w-0 flex-1 truncate text-sm">{detail.column}</h3>
+
+          <button
+            type="button"
+            onclick={() => copy(detail?.value ?? "")}
+            class="rounded-field bg-base-200 px-2 py-1 text-xs hover:bg-base-300"
+          >
+            {words.copyCell}
+          </button>
+
+          <button
+            type="button"
+            aria-label="close"
+            onclick={() => (detail = null)}
+            class="rounded-selector p-1 text-base-content/40
+              hover:text-base-content"
+          >
+            <Icon icon="lucide:x" class="size-4" />
+          </button>
+        </header>
+
+        <div class="min-h-0 flex-1 overflow-auto px-4 pb-4">
+          <pre
+            class="rounded-field bg-base-200 p-3 text-xs whitespace-pre-wrap
+              select-text">{pretty(detail.value)}</pre>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if busy || paging}
     <div
       class="pointer-events-none absolute bottom-3 left-3 z-30 flex
         items-center gap-2 rounded-field floating px-2 py-1 text-xs

@@ -3,17 +3,21 @@ import { Data, Effect } from "effect"
 
 import type {
   BackendInfo,
+  CellEdit,
   Completion,
   Credential,
-  Diagnostic,
+  DbObject,
   Discovery,
   Engine,
+  ExportFormat,
+  Plan,
   Provider,
   QueryResult,
   ReleaseCheck,
   SavedLogin,
   SessionConfig,
   SessionHandle,
+  Slice,
   SqlToken,
   TableInfo,
   TableSchema,
@@ -50,6 +54,14 @@ export function blankConfig(kind: Engine = "postgres"): SessionConfig {
     schema: "",
     tls: "prefer",
     readOnly: true,
+    tunnel: {
+      host: "",
+      port: "",
+      user: "",
+      password: "",
+      keyPath: "",
+      passphrase: "",
+    },
   }
 }
 
@@ -85,13 +97,47 @@ export const connect = (config: SessionConfig) =>
 
 export const disconnect = (id: string) => call<void>("disconnect", { id })
 
+export const resetSessions = () => call<void>("reset_sessions")
+
 export const setReadOnly = (id: string, on: boolean) =>
   call<void>("set_read_only", { id, on })
 
+export const setManual = (id: string, on: boolean) =>
+  call<void>("set_manual", { id, on })
+
+export const endTransaction = (id: string, commit: boolean) =>
+  call<boolean>("end_transaction", { id, commit })
+
+export const pendingEdits = (id: string, table: string, edits: CellEdit[]) =>
+  call<string[]>("pending_edits", { id, table, edits })
+
 export const tables = (id: string) => call<TableInfo[]>("tables", { id })
 
-export const tableRows = (id: string, table: string, limit = 500, offset = 0) =>
-  call<QueryResult>("table_rows", { id, table, limit, offset })
+export const schemas = (id: string) => call<string[]>("schemas", { id })
+
+export const objects = (id: string) => call<DbObject[]>("objects", { id })
+
+export const useSchema = (id: string, name: string) =>
+  call<void>("use_schema", { id, name })
+
+export const tableRows = (id: string, table: string, slice: Slice) =>
+  call<QueryResult>("table_rows", { id, table, slice })
+
+export const exportTable = (
+  id: string,
+  table: string,
+  slice: Slice,
+  format: ExportFormat,
+  path: string,
+) => call<number>("export_table", { id, table, slice, format, path })
+
+export const exportResult = (
+  id: string,
+  result: QueryResult,
+  table: string,
+  format: ExportFormat,
+  path: string,
+) => call<number>("export_result", { id, result, table, format, path })
 
 export const applyEdits = (
   id: string,
@@ -106,6 +152,12 @@ export const runQuery = (id: string, sql: string) =>
   call<QueryResult>("run_query", { id, sql })
 
 export const schema = (id: string) => call<TableSchema[]>("schema", { id })
+
+export const tableDdl = (id: string, table: string) =>
+  call<string>("table_ddl", { id, table })
+
+export const explainQuery = (id: string, sql: string, analyze: boolean) =>
+  call<Plan>("explain_query", { id, sql, analyze })
 
 export const scanLocal = () =>
   call<Discovery[]>("scan_local").pipe(
@@ -138,9 +190,6 @@ export const lspComplete = (
   line: number,
   character: number,
 ) => call<Completion[]>("lsp_complete", { dialect, text, line, character })
-
-export const lspDiagnostics = (dialect: string) =>
-  call<Diagnostic[]>("lsp_diagnostics", { dialect })
 
 export const setAcrylic = (on: boolean, dark: boolean) =>
   call<void>("set_acrylic", { on, dark })

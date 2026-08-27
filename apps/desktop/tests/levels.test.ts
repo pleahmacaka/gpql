@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test"
-import { byLevel, relationCount } from "../../../packages/ui/src/levels"
+import {
+  byLevel,
+  columnOffset,
+  relationCount,
+} from "../../../packages/ui/src/schema/levels"
 import type { SchemaTable as TableSchema } from "../../../packages/ui/src/types"
 
 const column = (name: string, references: string | null = null) => ({
@@ -44,4 +48,23 @@ test("tables sit one level past whatever they point at", () => {
 
 test("every foreign key column counts as one relation", () => {
   expect(relationCount(tables)).toBe(3)
+})
+
+test("policy rows add height so cards cannot overlap", () => {
+  const bare: TableSchema = { name: "users", rows: 0, columns: [column("id")] }
+  const guarded: TableSchema = { ...bare, policies: ["policy a (ALL)"] }
+
+  expect(columnOffset(guarded, 0)).toBeGreaterThan(columnOffset(bare, 0))
+})
+
+test("a multi-line note pushes columns further down than a single line", () => {
+  const one: TableSchema = {
+    name: "users",
+    rows: 0,
+    columns: [column("id")],
+    note: "one",
+  }
+  const two: TableSchema = { ...one, note: ["one", "two"].join("\n") }
+
+  expect(columnOffset(two, 0) - columnOffset(one, 0)).toBeGreaterThan(0)
 })

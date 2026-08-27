@@ -11,6 +11,7 @@
   import TabLayout from "$lib/components/shell/TabLayout.svelte"
 
   import ResultGrid from "./ResultGrid.svelte"
+  import TransactionBar from "./TransactionBar.svelte"
   import TableList from "./TableList.svelte"
 
   let view = $state<"table" | "chart">("table")
@@ -20,7 +21,7 @@
 
   let hits = $derived.by(() => {
     const needle = term.trim().toLowerCase()
-    const result = workspace.rows
+    const result = workspace.browse.result
 
     if (needle === "" || !result) {
       return []
@@ -88,10 +89,10 @@
 
   <section class="flex min-w-0 flex-1 flex-col rounded-box bg-base-100 lift">
     <header class="flex items-center gap-2 px-4 pt-2 pb-1">
-      <h2 class="text-sm font-medium">{workspace.selected ?? m.no_table()}</h2>
+      <h2 class="text-sm font-medium">{workspace.browse.table ?? m.no_table()}</h2>
 
       <span class="text-xs text-base-content/45">
-        {m.columns_count({ count: workspace.rows?.columns.length ?? 0 })}
+        {m.columns_count({ count: workspace.browse.result?.columns.length ?? 0 })}
       </span>
 
       <span class="flex-1"></span>
@@ -143,23 +144,26 @@
       </button>
     </header>
 
-    {#if view === "chart" && workspace.rows}
+    {#if view === "chart" && workspace.browse.result}
       <Lazy
         load={() => import("@gpql/ui/data/ResultChart.svelte")}
         props={{
-          columns: workspace.rows.columns,
-          rows: workspace.rows.rows,
+          columns: workspace.browse.result.columns,
+          rows: workspace.browse.result.rows,
         }}
       />
     {:else}
+      <TransactionBar />
+
       <ResultGrid
-        result={workspace.rows}
-        empty={workspace.selected ? m.no_rows() : m.pick_table()}
+        result={workspace.browse.result}
+        empty={workspace.browse.table ? m.no_rows() : m.pick_table()}
         types={workspace.columnTypes}
         {spot}
         needle={workspace.finding ? term.trim().toLowerCase() : ""}
         editable
         onblocked={() => (asking = true)}
+        browse={workspace.browse}
       />
     {/if}
   </section>
