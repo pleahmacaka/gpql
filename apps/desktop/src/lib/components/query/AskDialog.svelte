@@ -19,7 +19,7 @@
   )
 
   let chosen = $derived(provider || (choices[0]?.id ?? ""))
-  let base = $derived(workspace.sql.trim())
+  let base = $derived(workspace.query.sql.trim())
 
   $effect(() => {
     box?.focus()

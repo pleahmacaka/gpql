@@ -13,6 +13,7 @@
   import CredentialsPage from "./CredentialsPage.svelte"
   import KeysPage from "./KeysPage.svelte"
   import ModelsPage from "./ModelsPage.svelte"
+    import { loadIcons } from "@iconify/svelte/dist/functions";
 
   type Props = { onclose: () => void }
 
@@ -43,7 +44,7 @@
 
 <div
   transition:scale={pop()}
-  class="fixed inset-x-0 top-16 z-50 mx-auto flex h-fit max-h-3/4 w-2xl
+  class="fixed inset-x-0 top-16 z-50 mx-auto flex h-3/4 w-2xl
     max-w-11/12 overflow-hidden rounded-box floating lift"
   role="dialog"
   aria-label="Settings"

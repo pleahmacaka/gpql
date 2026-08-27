@@ -9,9 +9,19 @@
       keys: [
         { label: m.key_palette(), keys: ["ctrl", "k"] },
         { label: m.key_find(), keys: ["ctrl", "f"] },
+        { label: m.key_tabs(), keys: ["1", "2", "3"] },
         { label: m.key_settings(), keys: ["ctrl", ","] },
         { label: m.key_agent(), keys: ["ctrl", "j"] },
+        { label: m.key_orb(), keys: ["ctrl", "space"] },
         { label: m.key_close(), keys: ["escape"] },
+      ],
+    },
+    {
+      title: m.tab_data(),
+      keys: [
+        { label: m.key_cells(), keys: ["↑", "↓", "←", "→"] },
+        { label: m.key_edit(), keys: ["enter"] },
+        { label: m.key_copy(), keys: ["ctrl", "c"] },
       ],
     },
     {

@@ -1,4 +1,3 @@
-import axios from "axios"
 import { desc } from "drizzle-orm"
 
 import { local } from "$lib/db/client"
@@ -11,6 +10,28 @@ const fallback = import.meta.env.DEV
   : "https://gpql.dev"
 
 export const site = import.meta.env.VITE_GPQL_SITE ?? fallback
+
+async function ask<T>(
+  method: string,
+  token: string,
+  body?: string,
+): Promise<T> {
+  const answer = await fetch(`${site}/api/sync`, {
+    method,
+    body,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    signal: AbortSignal.timeout(15_000),
+  })
+
+  if (!answer.ok) {
+    throw new Error(`${answer.status} ${answer.statusText}`)
+  }
+
+  return method === "DELETE" ? (undefined as T) : ((await answer.json()) as T)
+}
 
 export async function sync(): Promise<string> {
   const token = await run(accountToken())
@@ -25,10 +46,7 @@ export async function sync(): Promise<string> {
     queries: await local.select().from(savedQuery),
   }
 
-  const { data } = await axios.post<SyncPayload>(`${site}/api/sync`, mine, {
-    headers: { Authorization: `Bearer ${token}` },
-    timeout: 15_000,
-  })
+  const data = await ask<SyncPayload>("POST", token, JSON.stringify(mine))
 
   await absorb(data)
 
@@ -74,10 +92,7 @@ export async function wipeCloud(): Promise<string> {
     return "sign in first"
   }
 
-  await axios.delete(`${site}/api/sync`, {
-    headers: { Authorization: `Bearer ${token}` },
-    timeout: 15_000,
-  })
+  await ask<void>("DELETE", token)
 
   return "cloud data cleared"
 }

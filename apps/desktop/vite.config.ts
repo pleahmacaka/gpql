@@ -7,7 +7,7 @@ import tailwindcss from "@tailwindcss/vite"
 
 import { defineConfig } from "vite"
 
-import { version } from "./package.json"
+import { version } from "./package.json" with { type: "json" }
 
 // the paraglide plugin only watches its project file, so message edits need a
 // nudge of their own
@@ -56,22 +56,8 @@ function messages() {
 
 export default defineConfig({
   clearScreen: false,
-  resolve: {
-    // the workspace symlink lands in node_modules, which vite neither
-    // watches nor HMRs; point straight at the source instead
-    alias: [
-      {
-        find: /^@gpql\/ui$/,
-        replacement: resolve(
-          import.meta.dirname,
-          "../../packages/ui/src/index.ts",
-        ),
-      },
-      {
-        find: /^@gpql\/ui\//,
-        replacement: `${resolve(import.meta.dirname, "../../packages/ui/src")}/`,
-      },
-    ],
+  optimizeDeps: {
+    exclude: ["@gpql/ui"],
   },
   define: {
     __GPQL_VERSION__: JSON.stringify(version),

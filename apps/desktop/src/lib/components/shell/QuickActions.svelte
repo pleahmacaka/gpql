@@ -86,14 +86,14 @@
     for (const entry of workspace.recents) {
       out.push({
         id: `recent:${entry.url}`,
-        label: entry.label,
-        hint: entry.detail,
+        label: entry.alias ?? entry.label,
+        hint: entry.alias ? entry.label : entry.detail,
         icon: workspace.iconFor(entry.kind),
         run: () => workspace.resume(entry.url, entry.kind),
       })
     }
 
-    for (const saved of workspace.saved) {
+    for (const saved of workspace.query.saved) {
       out.push({
         id: `saved:${saved.id}`,
         label: saved.name,
@@ -101,7 +101,7 @@
         icon: "lucide:bookmark",
         run: () => {
           workspace.tab = "query"
-          workspace.sql = saved.sql
+          workspace.query.sql = saved.sql
         },
       })
     }

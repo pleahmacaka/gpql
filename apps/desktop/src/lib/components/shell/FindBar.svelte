@@ -45,7 +45,8 @@
 
 <svelte:window
   onkeydown={event => {
-    if (event.key === "f" && event.ctrlKey) {
+    if (event.code === "KeyF" && event.ctrlKey) {
+      event.preventDefault()
       box?.focus()
       box?.select()
     }

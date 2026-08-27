@@ -30,15 +30,13 @@
 </script>
 
 <div class="flex flex-col items-center pt-4 pb-8 text-center">
-  <Logo class="size-16" />
+  <Logo class="size-24" />
 
   <h2 class="pt-4 font-display text-xl font-medium">GPQL</h2>
 
   <p class="pt-1 text-xs text-base-content/45">
     {m.about_version({ version })}
   </p>
-
-  <p class="pt-3 text-sm text-base-content/60">{m.about_tagline()}</p>
 
   <div class="flex items-center gap-2 pt-5">
     <button
@@ -53,7 +51,15 @@
       {:else}
         <Icon icon="lucide:refresh-cw" class="size-3.5" />
       {/if}
-      {checking ? m.update_checking() : m.update_check()}
+      {checking
+        ? m.update_checking()
+        : failed
+          ? m.update_failed()
+          : found
+            ? found.fresh
+              ? m.update_found({ version: found.latest })
+              : m.update_latest()
+            : m.update_check()}
     </button>
 
     {#if found?.fresh}
@@ -69,13 +75,6 @@
     {/if}
   </div>
 
-  {#if failed}
-    <p class="pt-3 text-xs text-error">{m.update_failed()}</p>
-  {:else if found}
-    <p class="pt-3 text-xs text-base-content/50">
-      {found.fresh ? m.update_found({ version: found.latest }) : m.update_latest()}
-    </p>
-  {/if}
 </div>
 
 <div class="space-y-1">

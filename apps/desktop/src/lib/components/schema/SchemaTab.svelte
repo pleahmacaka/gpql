@@ -10,11 +10,33 @@
   import TabLayout from "$lib/components/shell/TabLayout.svelte"
   import { site } from "$lib/sync/client"
 
-  import { board, relationCount } from "@gpql/ui"
+  import { Icon, board, relationCount } from "@gpql/ui"
+  import DiffPanel from "./DiffPanel.svelte"
   import SchemaBoard from "./SchemaBoard.svelte"
 
   let relations = $derived(relationCount(workspace.schema))
 
+  let diffing = $state(false)
+  let describing = $state(false)
+
+  async function annotate() {
+    const provider = workspace.model
+    const here = workspace.active
+
+    if (!provider || !here || describing) {
+      return
+    }
+
+    describing = true
+
+    try {
+      await here.describe(provider)
+    } catch (failure) {
+      workspace.notice = String(failure)
+    } finally {
+      describing = false
+    }
+  }
   let term = $state("")
   let hit = $state(0)
 
@@ -116,12 +138,46 @@
         </span>
       {/if}
 
+      {#if workspace.ai && workspace.model && workspace.active}
+        <button
+          type="button"
+          disabled={describing}
+          onclick={annotate}
+          class="flex items-center gap-1.5 rounded-field bg-base-200 px-2 py-1
+            text-xs hover:bg-base-300 disabled:opacity-40"
+        >
+          <Icon
+            icon={describing ? "lucide:loader-circle" : "lucide:text-quote"}
+            class="size-3.5 {describing ? 'animate-spin' : ''}"
+          />
+          {m.schema_describe()}
+        </button>
+      {/if}
+
+      {#if workspace.connections.length > 1}
+        <button
+          type="button"
+          aria-pressed={diffing}
+          onclick={() => (diffing = !diffing)}
+          class="flex items-center gap-1.5 rounded-field px-2 py-1 text-xs
+            {diffing
+            ? 'bg-primary/10 text-primary'
+            : 'bg-base-200 hover:bg-base-300'}"
+        >
+          <Icon icon="lucide:git-compare" class="size-3.5" />
+          {m.tab_diff()}
+        </button>
+      {/if}
     </header>
 
     <div class="min-h-0 flex-1 overflow-hidden rounded-box">
-      <SvelteFlowProvider>
-        <SchemaBoard />
-      </SvelteFlowProvider>
+      {#if diffing}
+        <DiffPanel />
+      {:else}
+        <SvelteFlowProvider>
+          <SchemaBoard />
+        </SvelteFlowProvider>
+      {/if}
     </div>
   </section>
 </TabLayout>

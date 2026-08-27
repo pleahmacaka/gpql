@@ -1,5 +1,3 @@
-import { resolve } from "node:path"
-
 import adapter from "@sveltejs/adapter-vercel"
 import { sveltekit } from "@sveltejs/kit/vite"
 import tailwindcss from "@tailwindcss/vite"
@@ -19,22 +17,8 @@ function erdSocket(): Plugin {
 }
 
 export default defineConfig({
-  resolve: {
-    // the workspace symlink lands in node_modules, which vite neither
-    // watches nor HMRs; point straight at the source instead
-    alias: [
-      {
-        find: /^@gpql\/ui$/,
-        replacement: resolve(
-          import.meta.dirname,
-          "../../packages/ui/src/index.ts",
-        ),
-      },
-      {
-        find: /^@gpql\/ui\//,
-        replacement: `${resolve(import.meta.dirname, "../../packages/ui/src")}/`,
-      },
-    ],
+  optimizeDeps: {
+    exclude: ["@gpql/ui"],
   },
   plugins: [
     erdSocket(),

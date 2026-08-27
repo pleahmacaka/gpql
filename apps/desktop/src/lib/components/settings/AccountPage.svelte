@@ -27,7 +27,7 @@
     try {
       note = await sync()
       await workspace.reloadRecents()
-      await workspace.reloadSaved()
+      await workspace.query.reload()
     } catch (failure) {
       note = String(failure)
     }

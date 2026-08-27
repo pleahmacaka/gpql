@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
@@ -39,7 +39,6 @@
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@xyflow/svelte": "^1.6.3",
     "ai": "^7.0.79",
-    "axios": "^1.19.0",
     "daisyui": "^5.7.21",
     "drizzle-orm": "^0.45.2",
     "effect": "^3.22.1",

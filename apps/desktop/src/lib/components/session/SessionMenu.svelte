@@ -90,7 +90,7 @@
     {#each workspace.recents as entry (entry.url)}
       <ListRow
         icon={workspace.iconFor(entry.kind)}
-        title={entry.label}
+        title={entry.alias ?? entry.label}
         detail={workspace.dialing === entry.url
           ? m.connecting_now()
           : workspace.unreachable[entry.url]

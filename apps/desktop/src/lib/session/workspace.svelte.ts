@@ -1,10 +1,10 @@
+import { board } from "@gpql/ui"
 import { desc, eq } from "drizzle-orm"
 
 import { local } from "$lib/db/client"
 import { migrate } from "$lib/db/migrate"
 import { preference, recent, savedQuery } from "$lib/db/schema"
 import { ErdDocument } from "$lib/erd/document.svelte"
-import * as m from "$lib/paraglide/messages"
 import { getLocale, setLocale } from "$lib/paraglide/runtime"
 import type {
   BackendInfo,
@@ -12,25 +12,19 @@ import type {
   Discovery,
   Mode,
   Provider,
-  QueryResult,
   SavedLogin,
   SessionConfig,
-  SessionHandle,
   Tab,
-  TableInfo,
-  TableSchema,
 } from "$lib/types"
-
 import * as api from "./commands"
 import { blankConfig } from "./commands"
+import { Connection, type ConnectionHost, idle } from "./connection.svelte"
 import { friendly } from "./errors"
 
 const PAGE = 1000
 const LIMITS = [200, 500, 1000, 5000, 20000]
 const WINDOW = 5
 const WINDOWS = [0, 1, 5, 15, 30]
-
-export type ChatTurn = { role: "you" | "agent"; text: string }
 
 export const schemes = ["system", "light", "dark"] as const
 
@@ -72,7 +66,6 @@ function configFrom(login: SavedLogin, readOnly: boolean): SessionConfig {
 }
 
 export class Workspace {
-  session = $state<SessionHandle | null>(null)
   erd = $state<ErdDocument | null>(null)
   tab = $state<Tab>("data")
   mode = $state<Mode>("recent")
@@ -95,23 +88,15 @@ export class Workspace {
   settled = $state(true)
   texture = $state(35)
 
-  tables = $state<TableInfo[]>([])
-  selected = $state<string | null>(null)
-  rows = $state<QueryResult | null>(null)
-
-  schema = $state<TableSchema[]>([])
-
-  sql = $state("")
-  selection = $state({ start: 0, end: 0 })
-  queryResult = $state<QueryResult | null>(null)
-  queryError = $state<string | null>(null)
-  queryRan = $state(false)
+  connections = $state<Connection[]>([])
+  activeId = $state<string | null>(null)
+  asideWidth = $state(256)
+  startup = $state<"last" | "recent">("last")
 
   recents = $state<(typeof recent.$inferSelect)[]>([])
-  saved = $state<(typeof savedQuery.$inferSelect)[]>([])
-  openQuery = $state<string | null>(null)
-  autosaved = $state(false)
   finding = $state(false)
+  notice = $state("")
+  ddl = $state<{ name: string; text: string } | null>(null)
 
   found = $state<Discovery[]>([])
   scanning = $state(false)
@@ -120,19 +105,111 @@ export class Workspace {
   servers = $state<string[]>([])
   shared = $state("")
   connecting = $state(false)
+  adding = $state(false)
   unreachable = $state<Record<string, string>>({})
   dialing = $state<string | null>(null)
   editing = $state<string | null>(null)
-  chatOpen = $state(false)
-  chatBusy = $state(false)
-  chatError = $state("")
-  chat = $state<ChatTurn[]>([])
   languageServers = $state<Record<string, string>>({})
   providers = $state<Provider[]>([])
   signedIn = $state(false)
 
   busy = $state(false)
   error = $state<string | null>(null)
+
+  private wiring: ConnectionHost = {
+    pageSize: () => this.rowLimit,
+    provider: () => this.model,
+    remember: (key, value) => this.remember(key, value),
+    steer: async (connection, move) => {
+      switch (move.go) {
+        case "query":
+          this.tab = "query"
+          connection.query.sql = move.sql
+          connection.query.spot = true
+          break
+        case "data":
+          this.tab = "data"
+          await connection.select(move.table)
+          break
+        case "schema":
+          this.tab = "schema"
+          board.focus(move.table)
+          break
+        case "chat":
+          break
+      }
+    },
+  }
+
+  get active(): Connection | null {
+    return (
+      this.connections.find(entry => entry.id === this.activeId) ??
+      this.connections[0] ??
+      null
+    )
+  }
+
+  // the app is written against "the connection you are looking at"; the tab
+  // strip is the only thing that needs to know there are several
+  get session() {
+    return this.active?.handle ?? null
+  }
+
+  get tables() {
+    return this.active?.tables ?? []
+  }
+
+  get objects() {
+    return this.active?.objects ?? []
+  }
+
+  get schema() {
+    return this.active?.schema ?? []
+  }
+
+  get schemaNames() {
+    return this.active?.schemaNames ?? []
+  }
+
+  get schemaPicked() {
+    return this.active?.schemaPicked ?? ""
+  }
+
+  get favorites() {
+    return this.active?.favorites ?? []
+  }
+
+  get browse() {
+    return (this.active ?? idle).browse
+  }
+
+  get query() {
+    return (this.active ?? idle).query
+  }
+
+  get writes() {
+    return (this.active ?? idle).writes
+  }
+
+  get chat() {
+    return (this.active ?? idle).chat
+  }
+
+  get keyColumns() {
+    return this.active?.keyColumns ?? []
+  }
+
+  get columnTypes() {
+    return this.active?.columnTypes ?? {}
+  }
+
+  get references() {
+    return this.active?.references ?? {}
+  }
+
+  get writable() {
+    return this.active?.writable ?? false
+  }
 
   get dialect() {
     const backend = this.catalog.find(entry => entry.id === this.session?.kind)
@@ -154,7 +231,7 @@ export class Workspace {
       }
     }
 
-    for (const column of this.rows?.columns ?? []) {
+    for (const column of this.browse.result?.columns ?? []) {
       words.add(column)
     }
 
@@ -201,6 +278,16 @@ export class Workspace {
     this.minimap = settings.get("minimap") !== "off"
     this.rowLimit = Number(settings.get("rowLimit") ?? PAGE) || PAGE
     this.settled = settings.get("settled") === "yes"
+    this.startup = settings.get("startup") === "recent" ? "recent" : "last"
+    this.writes.load(settings)
+
+    const side = settings.get("orbSide")
+
+    if (side === "center" || side === "left") {
+      this.chat.side = side
+    }
+
+    this.asideWidth = Number(settings.get("asideWidth")) || this.asideWidth
 
     for (const [key, value] of settings) {
       if (key.startsWith("lsp:")) {
@@ -209,14 +296,41 @@ export class Workspace {
     }
     this.texture = Number(settings.get("texture") ?? 35)
 
+    await api.run(api.resetSessions())
+
     await this.paint()
 
-    await this.reloadRecents()
-    await this.reloadSaved()
-    await this.reloadCatalog()
-    await this.reloadPresets()
-    await this.reloadProviders()
-    await this.refreshAccount()
+    await Promise.all([
+      this.reloadRecents(),
+      this.chat.reload(),
+      this.query.reload(),
+      this.query.reloadHistory(),
+      this.reloadCatalog(),
+      this.reloadPresets(),
+      this.reloadProviders(),
+      this.refreshAccount(),
+    ])
+
+    const last = this.recents[0]
+
+    if (this.settled && this.startup === "last" && last) {
+      void this.resume(last.url, last.kind)
+    }
+  }
+
+  async setStartup(mode: "last" | "recent") {
+    this.startup = mode
+    await this.remember("startup", mode)
+  }
+
+  async setOrbSide(side: "left" | "center" | "right") {
+    this.chat.side = side
+    await this.remember("orbSide", side)
+  }
+
+  async setAsideWidth(width: number) {
+    this.asideWidth = width
+    await this.remember("asideWidth", String(width))
   }
 
   async remember(key: string, value: string) {
@@ -252,9 +366,9 @@ export class Workspace {
     await this.remember(key, this[key] ? "on" : "off")
 
     if (key === "readOnly") {
-      if (this.session) {
-        await api.run(api.setReadOnly(this.session.id, this.readOnly))
-        this.session = { ...this.session, readOnly: this.readOnly }
+      for (const entry of this.connections) {
+        await api.run(api.setReadOnly(entry.id, this.readOnly))
+        entry.handle = { ...entry.handle, readOnly: this.readOnly }
       }
 
       this.countDown()
@@ -325,8 +439,8 @@ export class Workspace {
     this.rowLimit = rows
     await this.remember("rowLimit", String(rows))
 
-    if (this.selected) {
-      await this.select(this.selected)
+    if (this.browse.table) {
+      await this.select(this.browse.table)
     }
   }
 
@@ -368,7 +482,7 @@ export class Workspace {
     await local.delete(preference)
 
     this.recents = []
-    this.saved = []
+    this.query.saved = []
     this.unreachable = {}
 
     return "local data cleared"
@@ -413,13 +527,6 @@ export class Workspace {
     this.unreachable = found
   }
 
-  async reloadSaved() {
-    this.saved = await local
-      .select()
-      .from(savedQuery)
-      .orderBy(desc(savedQuery.savedAt))
-  }
-
   async startLanguageServer(dialect: string, line: string) {
     const [program, ...args] = line.trim().split(/\s+/)
 
@@ -453,36 +560,6 @@ export class Workspace {
     this.presets = await api.run(api.credentials())
   }
 
-  async say(prompt: string) {
-    const text = prompt.trim()
-    const provider = this.model
-
-    if (text === "" || this.chatBusy) {
-      return
-    }
-
-    if (!provider) {
-      this.chatError = friendly("gpql.no_model")
-
-      return
-    }
-
-    this.chat = [...this.chat, { role: "you", text }]
-    this.chatBusy = true
-    this.chatError = ""
-
-    try {
-      const { talk } = await import("$lib/ai/chat")
-      const answer = await talk(provider, this.chat, this.schema)
-
-      this.chat = [...this.chat, { role: "agent", text: answer }]
-    } catch (failure) {
-      this.chatError = friendly(String(failure))
-    } finally {
-      this.chatBusy = false
-    }
-  }
-
   get model() {
     return (
       this.providers.find(entry => entry.id === this.picked) ??
@@ -510,8 +587,8 @@ export class Workspace {
       return
     }
 
-    this.busy = true
-    this.queryError = null
+    this.query.busy = true
+    this.query.error = null
 
     try {
       const provider = this.providers.find(entry => entry.id === providerId)
@@ -522,12 +599,17 @@ export class Workspace {
 
       const { writeSql } = await import("$lib/ai/sql")
 
-      this.sql = await writeSql(provider, prompt, this.schema, this.sql)
-      this.selection = { start: 0, end: 0 }
+      this.query.sql = await writeSql(
+        provider,
+        prompt,
+        this.schema,
+        this.query.sql,
+      )
+      this.query.selection = { start: 0, end: 0 }
     } catch (failure) {
-      this.queryError = friendly(String(failure))
+      this.query.error = friendly(String(failure))
     } finally {
-      this.busy = false
+      this.query.busy = false
     }
   }
 
@@ -576,13 +658,21 @@ export class Workspace {
         await api.run(api.forgetLogin(stale))
       }
 
+      const opened = new Connection(handle, this.wiring)
+
       this.editing = null
       this.erd = null
-      this.session = handle
+      this.connections = [...this.connections, opened]
+      this.activeId = opened.id
+      this.adding = false
       this.connecting = false
       this.tab = "data"
+      this.notice = ""
+      this.ddl = null
+      board.reset()
+
       await this.reloadRecents()
-      await this.loadTables()
+      await opened.loadTables()
     } catch (failure) {
       this.error = friendly(String(failure))
       throw failure
@@ -711,45 +801,75 @@ export class Workspace {
     this.connecting = true
   }
 
-  async close() {
-    if (!this.session) {
+  async close(id = this.activeId) {
+    const going = this.connections.find(entry => entry.id === id)
+
+    if (!going) {
       return
     }
 
-    try {
-      await api.run(api.disconnect(this.session.id))
-    } catch {
-      this.error = null
+    await going.close()
+
+    this.connections = this.connections.filter(entry => entry.id !== going.id)
+    this.activeId = this.connections[0]?.id ?? null
+
+    if (this.connections.length === 0) {
+      this.readOnly = true
+      this.countDown()
+      this.finding = false
+      this.mode = "recent"
+      this.notice = ""
+      this.ddl = null
+      board.reset()
+    }
+  }
+
+  show(id: string) {
+    if (this.connections.some(entry => entry.id === id)) {
+      this.activeId = id
+      this.adding = false
+      this.tab = "data"
+      board.reset()
+    }
+  }
+
+  async useSchema(name: string) {
+    await this.active?.useSchema(name)
+  }
+
+  async showDdl(name: string) {
+    const session = this.session
+
+    if (!session) {
+      return
     }
 
-    this.session = null
-    this.readOnly = true
-    this.countDown()
-    this.tables = []
-    this.schema = []
-    this.rows = null
-    this.selected = null
-    this.queryResult = null
-    this.queryError = null
-    this.queryRan = false
-    this.openQuery = null
-    this.autosaved = false
-    this.finding = false
-    this.selection = { start: 0, end: 0 }
-    this.mode = "recent"
+    this.ddl = { name, text: "" }
+
+    try {
+      const text = await api.run(api.tableDdl(session.id, name))
+
+      if (this.ddl) {
+        this.ddl = { name, text }
+      }
+    } catch (failure) {
+      this.ddl = { name, text: friendly(String(failure)) }
+    }
+  }
+
+  resetCatalog() {
+    this.notice = ""
+    this.ddl = null
+    this.active?.forgetCatalog()
+    board.reset()
   }
 
   async loadTables() {
-    if (!this.session) {
-      return
-    }
+    await this.active?.loadTables()
+  }
 
-    this.tables = await api.run(api.tables(this.session.id))
-    const first = this.tables[0]
-
-    if (first) {
-      await this.select(first.name)
-    }
+  async toggleFavorite(name: string) {
+    await this.active?.toggleFavorite(name)
   }
 
   iconFor(kind: string) {
@@ -758,24 +878,24 @@ export class Workspace {
     return found?.icon ?? "lucide:database"
   }
 
-  get keyColumns() {
-    const found = this.schema.find(entry => entry.name === this.selected)
+  async jumpTo(column: string, value: string) {
+    const target = this.references[column]
 
-    return (found?.columns ?? [])
-      .filter(column => column.primaryKey)
-      .map(column => column.name)
-  }
+    if (!target) {
+      return
+    }
 
-  get columnTypes() {
-    const found = this.schema.find(entry => entry.name === this.selected)
+    const [table, key] = target.split(".")
 
-    return Object.fromEntries(
-      (found?.columns ?? []).map(column => [column.name, column.dataType]),
-    )
-  }
+    if (!table || !key) {
+      return
+    }
 
-  get writable() {
-    return this.session !== null && !this.session.readOnly
+    this.tab = "data"
+    await this.browse.open(table)
+    await this.browse.setFilters({
+      [key]: { op: "eq", value, needsValue: true },
+    })
   }
 
   async applyEdits(
@@ -784,17 +904,12 @@ export class Workspace {
       set: Record<string, string | null>
     }[],
   ) {
-    if (!this.session || !this.selected) {
-      return
-    }
-
     this.busy = true
     this.error = null
 
     try {
-      await api.run(api.applyEdits(this.session.id, this.selected, edits))
+      await this.active?.applyEdits(edits)
       this.countDown()
-      await this.select(this.selected)
     } catch (failure) {
       this.error = String(failure)
       throw failure
@@ -804,148 +919,22 @@ export class Workspace {
   }
 
   async select(table: string) {
-    if (!this.session) {
-      return
-    }
-
-    this.selected = table
-    this.busy = true
-
-    try {
-      const result = await api.run(
-        api.tableRows(this.session.id, table, this.rowLimit, 0),
-      )
-
-      this.rows = result
-
-      if (result.rows.length < this.rowLimit) {
-        const exact = result.rows.length
-        const info = this.tables.find(entry => entry.name === table)
-        const node = this.schema.find(entry => entry.name === table)
-
-        if (info) {
-          info.rows = exact
-        }
-
-        if (node) {
-          node.rows = exact
-        }
-      }
-
-      await this.loadSchema()
-    } finally {
-      this.busy = false
-    }
+    await this.active?.select(table)
   }
 
   async loadSchema() {
-    if (!this.session || this.schema.length > 0) {
-      return
-    }
-
-    this.schema = await api.run(api.schema(this.session.id))
+    await this.active?.loadSchema()
   }
 
-  get chosen() {
-    const { start, end } = this.selection
-    const picked = end > start ? this.sql.slice(start, end) : this.sql
+  async renameRecent(url: string, alias: string) {
+    const name = alias.trim()
 
-    return picked.trim()
-  }
+    await local
+      .update(recent)
+      .set({ alias: name === "" ? null : name })
+      .where(eq(recent.url, url))
 
-  async run() {
-    if (!this.session || this.chosen === "") {
-      return
-    }
-
-    this.busy = true
-    this.queryError = null
-
-    try {
-      const fault = await api.run(api.checkSql(this.chosen, this.dialect))
-
-      if (fault) {
-        this.queryError = m.sql_fault({
-          line: fault.line + 1,
-          column: fault.column + 1,
-          text: fault.text.slice(0, 40) || "?",
-        })
-        this.queryResult = null
-
-        return
-      }
-
-      this.queryResult = await api.run(
-        api.runQuery(this.session.id, this.chosen),
-      )
-      this.queryRan = true
-    } catch (failure) {
-      this.queryError = friendly(String(failure))
-      this.queryResult = null
-    } finally {
-      this.busy = false
-    }
-  }
-
-  clearQuery() {
-    this.sql = ""
-    this.queryResult = null
-    this.queryError = null
-    this.queryRan = false
-    this.openQuery = null
-    this.autosaved = false
-  }
-
-  loadSaved(id: string) {
-    const entry = this.saved.find(row => row.id === id)
-
-    if (!entry) {
-      return
-    }
-
-    this.sql = entry.sql
-    this.selection = { start: 0, end: 0 }
-    this.openQuery = entry.id
-    this.autosaved = false
-  }
-
-  async keep() {
-    if (this.sql.trim() === "") {
-      return
-    }
-
-    const now = Math.floor(Date.now() / 1000)
-
-    if (this.openQuery) {
-      await local
-        .update(savedQuery)
-        .set({ name: firstLine(this.sql), sql: this.sql, savedAt: now })
-        .where(eq(savedQuery.id, this.openQuery))
-    } else {
-      const id = crypto.randomUUID()
-
-      await local.insert(savedQuery).values({
-        id,
-        name: firstLine(this.sql),
-        sql: this.sql,
-        target: this.session?.label ?? "",
-        savedAt: now,
-      })
-
-      this.openQuery = id
-    }
-
-    await this.reloadSaved()
-  }
-
-  async drop(id: string) {
-    await local.delete(savedQuery).where(eq(savedQuery.id, id))
-
-    if (this.openQuery === id) {
-      this.openQuery = null
-    }
-
-    await this.reloadSaved()
+    await this.reloadRecents()
   }
 
   async forgetRecent(url: string) {
@@ -953,12 +942,6 @@ export class Workspace {
     await api.run(api.forgetLogin(url))
     await this.reloadRecents()
   }
-}
-
-function firstLine(sql: string) {
-  const line = sql.trim().split("\n")[0]
-
-  return line.length > 60 ? `${line.slice(0, 57)}...` : line
 }
 
 export const workspace = new Workspace()
