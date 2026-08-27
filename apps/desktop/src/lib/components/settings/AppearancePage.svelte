@@ -2,7 +2,7 @@
   import * as m from "$lib/paraglide/messages"
   import { locales } from "$lib/paraglide/runtime"
 
-  import { Dropdown, Icon, OptionRow as OptionRow } from "@gpql/ui"
+  import { Dropdown, OptionRow, SettingRow } from "@gpql/ui"
   import { type Scheme, schemes, workspace } from "$lib/session/workspace.svelte"
 
   const label = (scheme: Scheme) =>
@@ -61,14 +61,42 @@
     onclick={() => workspace.toggle("minimap")}
   />
 
-  <div class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-2.5">
-    <Icon icon="lucide:timer" class="size-4 text-base-content/40" />
+  <SettingRow
+    icon="lucide:message-circle"
+    title={m.option_orb()}
+    detail={m.option_orb_hint()}
+  >
+    <Dropdown
+      options={[
+        { value: "left", label: m.orb_left() },
+        { value: "center", label: m.orb_center() },
+        { value: "right", label: m.orb_right() },
+      ]}
+      value={workspace.chat.side}
+      onpick={side => workspace.setOrbSide(side)}
+    />
+  </SettingRow>
 
-    <div class="flex-1">
-      <p class="text-sm">{m.write_window()}</p>
-      <p class="text-xs text-base-content/45">{m.write_window_hint()}</p>
-    </div>
+  <SettingRow
+    icon="lucide:door-open"
+    title={m.option_startup()}
+    detail={m.option_startup_hint()}
+  >
+    <Dropdown
+      options={[
+        { value: "last", label: m.startup_last() },
+        { value: "recent", label: m.startup_recent() },
+      ]}
+      value={workspace.startup}
+      onpick={mode => workspace.setStartup(mode)}
+    />
+  </SettingRow>
 
+  <SettingRow
+    icon="lucide:timer"
+    title={m.write_window()}
+    detail={m.write_window_hint()}
+  >
     <Dropdown
       options={workspace.windows.map(minutes => ({
         value: String(minutes),
@@ -77,7 +105,25 @@
       value={String(workspace.writeWindow)}
       onpick={minutes => workspace.setWriteWindow(Number(minutes))}
     />
-  </div>
+  </SettingRow>
+
+  <OptionRow
+    icon="lucide:file-pen-line"
+    title={m.option_preview()}
+    detail={m.option_preview_hint()}
+    on={workspace.writes.preview}
+    onclick={() => workspace.writes.setPreview(!workspace.writes.preview)}
+  />
+
+  <OptionRow
+    icon="lucide:git-commit-horizontal"
+    title={m.option_manual()}
+    detail={workspace.writes.available
+      ? m.option_manual_hint()
+      : m.tx_unsupported()}
+    on={workspace.writes.manual}
+    onclick={() => workspace.writes.setManual(!workspace.writes.manual)}
+  />
 
   <OptionRow
     icon="lucide:lock"

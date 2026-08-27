@@ -8,6 +8,34 @@
       "when": 1787548469693,
       "tag": "0000_rare_stranger",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787793932265,
+      "tag": "0001_next_sinister_six",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787803634453,
+      "tag": "0002_good_electro",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787805924569,
+      "tag": "0003_living_cyclops",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787810824399,
+      "tag": "0004_rainy_captain_cross",
+      "breakpoints": true
     }
   ]
 }

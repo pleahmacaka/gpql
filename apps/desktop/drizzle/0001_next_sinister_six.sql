@@ -1,0 +1,1 @@
+ALTER TABLE `recent` ADD `alias` text;
