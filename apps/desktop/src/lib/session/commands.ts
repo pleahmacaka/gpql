@@ -13,10 +13,12 @@ import type {
   Plan,
   Provider,
   QueryResult,
+  QueryShape,
   ReleaseCheck,
   SavedLogin,
   SessionConfig,
   SessionHandle,
+  SharedErd,
   Slice,
   SqlToken,
   TableInfo,
@@ -61,6 +63,7 @@ export function blankConfig(kind: Engine = "postgres"): SessionConfig {
       password: "",
       keyPath: "",
       passphrase: "",
+      localPort: "",
     },
   }
 }
@@ -122,6 +125,13 @@ export const useSchema = (id: string, name: string) =>
 
 export const tableRows = (id: string, table: string, slice: Slice) =>
   call<QueryResult>("table_rows", { id, table, slice })
+
+export const builtQuery = (
+  id: string,
+  table: string,
+  slice: Slice,
+  shape: QueryShape,
+) => call<string>("built_query", { id, table, slice, shape })
 
 export const exportTable = (
   id: string,
@@ -195,7 +205,12 @@ export const setAcrylic = (on: boolean, dark: boolean) =>
   call<void>("set_acrylic", { on, dark })
 
 export const publishSchema = (site: string, name: string, sessionId: string) =>
-  call<string>("publish_schema", { site, name, sessionId })
+  call<SharedErd>("publish_schema", { site, name, sessionId })
+
+export const shareErd = (site: string, id: string, open: boolean) =>
+  call<boolean>("share_erd", { site, id, open })
+
+export const openLink = (url: string) => call<void>("open_link", { url })
 
 export const savedLogins = () => call<SavedLogin[]>("saved_logins")
 
@@ -235,6 +250,10 @@ export const connectOpenrouter = (model: string) =>
 export const openrouterModels = () => call<string[]>("openrouter_models")
 
 export const latestRelease = () => call<ReleaseCheck>("latest_release")
+
+export const portFree = (port: number) => call<boolean>("port_free", { port })
+
+export const sshKeys = () => call<string[]>("ssh_keys")
 
 export const accountToken = () => call<string | null>("account_token")
 

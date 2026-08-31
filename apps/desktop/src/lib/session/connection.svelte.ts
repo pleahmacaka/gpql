@@ -18,6 +18,7 @@ import { Writes } from "./writes.svelte"
 
 export type ConnectionHost = {
   pageSize: () => number
+  dialect: (kind: string) => string
   provider: () => Provider | null
   remember: (key: string, value: string) => Promise<void>
   steer: (connection: Connection, move: PilotMove) => Promise<void>
@@ -41,8 +42,11 @@ export class Connection {
   writes: Writes
   chat: Chat
 
+  private host: ConnectionHost
+
   constructor(handle: SessionHandle, host: ConnectionHost) {
     this.handle = handle
+    this.host = host
 
     this.browse = new Browse({
       session: () => this.live,
@@ -97,9 +101,7 @@ export class Connection {
   }
 
   get dialect() {
-    return this.handle.kind === "neo4j" || this.handle.kind === "falkordb"
-      ? "cypher"
-      : "sql"
+    return this.host.dialect(this.handle.kind)
   }
 
   get writable() {
@@ -170,11 +172,11 @@ export class Connection {
 
   // the model only annotates what it is shown, and the notes stay in memory
   // rather than being written back to the database
-  async describe(provider: Provider) {
+  async describe(provider: Provider, abortSignal?: AbortSignal) {
     await this.loadSchema()
 
     const { describeTables } = await import("$lib/ai/advise")
-    const notes = await describeTables(provider, this.schema)
+    const notes = await describeTables(provider, this.schema, abortSignal)
 
     this.schema = this.schema.map(table =>
       notes[table.name] ? { ...table, note: notes[table.name] } : table,
@@ -279,6 +281,7 @@ export const idle = new Connection(
   },
   {
     pageSize: () => 0,
+    dialect: () => "sql",
     provider: () => null,
     remember: async () => {},
     steer: async () => {},

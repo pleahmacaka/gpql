@@ -18,6 +18,13 @@ export interface BackendInfo {
   icon: string
   port: string
   fields: BackendField[]
+  wip: boolean
+}
+
+export interface SharedErd {
+  id: string
+  link: string
+  open: boolean
 }
 
 export interface TunnelConfig {
@@ -27,6 +34,7 @@ export interface TunnelConfig {
   password: string
   keyPath: string
   passphrase: string
+  localPort: string
 }
 
 export interface SessionConfig {

@@ -9,7 +9,7 @@
 
   import NewSession from "./NewSession.svelte"
   import QuickConnect from "./QuickConnect.svelte"
-  import RecentList from "./RecentList.svelte"
+  import ConnectionList from "./ConnectionList.svelte"
 
   let seed = $state<SessionConfig | null>(null)
   let from = $state<Mode>("recent")
@@ -94,7 +94,7 @@
   {:else if workspace.mode === "quick"}
     <QuickConnect onhandoff={handoff} />
   {:else if workspace.mode === "recent"}
-    <RecentList onedit={handoff} />
+    <ConnectionList onedit={handoff} />
   {:else}
     <ErdStart />
   {/if}

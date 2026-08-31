@@ -6,7 +6,6 @@
     type?: "text" | "password"
     placeholder?: string
     autofocus?: boolean
-    suggestions?: string[]
     onkeydown?: (event: KeyboardEvent) => void
   }
 
@@ -17,19 +16,14 @@
     type = "text",
     placeholder = "",
     autofocus = false,
-    suggestions = [],
     onkeydown,
   }: Props = $props()
 
   let focused = $state(false)
-
-  let listId = $derived(
-    suggestions.length > 0 ? `list-${label.replace(/\s+/g, "-")}` : undefined,
-  )
 </script>
 
 <label
-  class="block cursor-text rounded-field px-3 pt-1.5 pb-2 transition-colors
+  class="block cursor-text rounded-field px-3 pt-2 pb-2 transition-colors
     {focused ? 'bg-primary/10' : 'bg-base-200'}"
 >
   <span
@@ -55,7 +49,6 @@
     <!-- svelte-ignore a11y_autofocus -->
     <input
       type="text"
-      list={listId}
       bind:value
       oninput={event => oninput?.(event.currentTarget.value)}
       {placeholder}
@@ -68,13 +61,5 @@
       onblur={() => (focused = false)}
       class="w-full bg-transparent text-sm outline-none placeholder:text-base-content/25"
     />
-  {/if}
-
-  {#if listId}
-    <datalist id={listId}>
-      {#each suggestions as option (option)}
-        <option value={option}></option>
-      {/each}
-    </datalist>
   {/if}
 </label>

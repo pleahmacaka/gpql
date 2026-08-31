@@ -1,4 +1,4 @@
-import type { Engine } from "./session"
+import type { Engine, TunnelConfig } from "./session"
 
 export interface SavedLogin {
   url: string
@@ -14,6 +14,7 @@ export interface SavedLogin {
   tls: string
   warehouse: string
   schema: string
+  tunnel: TunnelConfig
 }
 
 export interface Credential {

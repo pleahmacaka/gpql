@@ -88,7 +88,7 @@
   data-tauri-drag-region
   class="flex h-11 shrink-0 items-center gap-2 pl-4"
 >
-  <span class="flex items-center gap-1.5 text-sm text-base-content/45">
+  <span class="flex items-center gap-2 text-sm text-base-content/45">
     <Logo class="size-4 text-base-content/70" plain />
     GPQL
   </span>
@@ -106,7 +106,7 @@
       class="size-4 stroke-current stroke-1 text-base-content/50"
     />
     <span class="whitespace-nowrap">{chip}</span>
-    <Icon icon="lucide:chevron-down" class="size-3.5 text-base-content/40" />
+    <Icon icon="lucide:chevron-down" class="size-4 text-base-content/40" />
   </svelte:element>
 
   <div data-tauri-drag-region class="flex flex-1 justify-center">
@@ -130,12 +130,12 @@
             onclick={() => ontab?.(entry.label)}
             aria-pressed={entry.label === tab}
             data-tab={entry.label}
-            class="relative z-10 flex items-center gap-1.5 rounded-selector px-3
+            class="relative z-10 flex items-center gap-2 rounded-selector px-3
               py-1 text-sm transition-colors {entry.label === tab
               ? 'font-medium'
               : 'text-base-content/55 hover:text-base-content'}"
           >
-            <Icon icon={entry.icon} class="size-3.5" />
+            <Icon icon={entry.icon} class="size-4" />
             {entry.label}
           </svelte:element>
         {/each}
@@ -143,19 +143,19 @@
     {/if}
   </div>
 
-  <svelte:element
-    this={live ? "button" : "span"}
-    role={live ? "button" : undefined}
-    tabindex={live ? 0 : undefined}
-    aria-label="Agent"
-    aria-pressed={agentOn}
-    onclick={onagent}
-    class="grid h-11 w-12 place-items-center
-      {agentOn ? 'text-primary' : 'text-base-content/60'}
-      {live ? 'transition-colors hover:bg-base-300' : ''}"
-  >
-    <Icon icon="lucide:sparkles" class="size-4" />
-  </svelte:element>
+  {#if onagent}
+    <button
+      type="button"
+      aria-label="Agent"
+      aria-pressed={agentOn}
+      onclick={onagent}
+      class="grid h-11 w-12 place-items-center transition-colors
+        hover:bg-base-300
+        {agentOn ? 'text-primary' : 'text-base-content/60'}"
+    >
+      <Icon icon="lucide:sparkles" class="size-4" />
+    </button>
+  {/if}
 
   <svelte:element
     this={live ? "button" : "span"}

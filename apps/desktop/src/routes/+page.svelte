@@ -11,7 +11,6 @@
   import WritePreview from "$lib/components/data/WritePreview.svelte"
   import ConnectPanel from "$lib/components/session/ConnectPanel.svelte"
   import SessionMenu from "$lib/components/session/SessionMenu.svelte"
-  import SessionTabs from "$lib/components/session/SessionTabs.svelte"
   import FirstRun from "$lib/components/shell/FirstRun.svelte"
   import QuickActions from "$lib/components/shell/QuickActions.svelte"
   import TitleBar from "$lib/components/shell/TitleBar.svelte"
@@ -60,8 +59,8 @@
 
   const SHORTCUTS: Shortcut[] = [
     { code: "KeyF", ctrl: true, when: () => live, run: () => (workspace.finding = true) },
-    { code: "KeyJ", ctrl: true, run: () => workspace.chat.show("panel") },
-    { code: "Space", ctrl: true, when: () => live && workspace.ai, run: () => workspace.chat.show("orb") },
+    { code: "KeyJ", ctrl: true, when: () => workspace.agentReady, run: () => workspace.chat.show("panel") },
+    { code: "Space", ctrl: true, when: () => workspace.agentReady, run: () => workspace.chat.show("orb") },
     { code: "Comma", ctrl: true, run: () => (settingsOpen = true) },
     { code: "KeyK", ctrl: true, run: () => (paletteOpen = !paletteOpen) },
     ...TABS.map((tab, index) => ({
@@ -136,8 +135,6 @@
     onOpenSettings={() => (settingsOpen = true)}
   />
 
-  <SessionTabs />
-
   <div class="flex min-h-0 flex-1">
     <main class="min-h-0 min-w-0 flex-1 gridfield">
     {#if !workspace.settled}
@@ -172,7 +169,7 @@
     {/if}
     </main>
 
-    {#if workspace.ai && workspace.chat.dock === "panel"}
+    {#if workspace.agentReady && workspace.chat.dock === "panel"}
       <div class="flex min-h-0 py-2 pr-2">
         <ChatSurface />
       </div>
@@ -190,7 +187,7 @@
     />
   {/if}
 
-  {#if workspace.ai && workspace.chat.dock === "orb"}
+  {#if workspace.agentReady && workspace.chat.dock === "orb"}
     <ChatSurface />
   {/if}
 

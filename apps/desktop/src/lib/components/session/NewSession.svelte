@@ -28,6 +28,15 @@
   let running: Fiber.RuntimeFiber<void, never> | null = null
 
   let catalogue = $state<string[]>([])
+  let keyFiles = $state<string[]>([])
+  let localPortTaken = $state(false)
+  let alias = $state(
+    untrack(
+      () =>
+        workspace.recents.find(entry => entry.url === workspace.editing)
+          ?.alias ?? "",
+    ),
+  )
 
   let backend = $derived(
     workspace.catalog.find(entry => entry.id === config.kind),
@@ -41,9 +50,12 @@
       .every(field => String(config[field.key] ?? "").trim() !== ""),
   )
 
-  // a jump host only makes sense when the driver dials a host and port
+  // a jump host can carry anything that dials a server, whether the address
+  // arrives as a host and port or inside a url
   let overHost = $derived(
-    (backend?.fields ?? []).some(field => field.key === "host"),
+    (backend?.fields ?? []).some(
+      field => field.key === "host" || field.key === "url",
+    ),
   )
 
   let wantsDatabase = $derived(
@@ -56,6 +68,26 @@
         (String(config.host ?? "").trim() !== "" &&
           String(config.user ?? "").trim() !== "")),
   )
+
+  $effect(() => {
+    api.run(api.sshKeys()).then(found => (keyFiles = found))
+  })
+
+  $effect(() => {
+    const asked = Number(config.tunnel?.localPort ?? "")
+
+    if (!Number.isInteger(asked) || asked < 1 || asked > 65535) {
+      localPortTaken = false
+
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      localPortTaken = !(await api.run(api.portFree(asked)))
+    }, 400)
+
+    return () => clearTimeout(timer)
+  })
 
   $effect(() => {
     void [
@@ -170,7 +202,9 @@
 
   async function keep() {
     try {
-      await workspace.keepConnection(config)
+      const url = await workspace.keepConnection(config)
+
+      await workspace.renameRecent(url, alias)
       onsaved?.()
     } catch (failure) {
       probe = { tone: "bad", text: friendly(String(failure)) }
@@ -180,6 +214,7 @@
   async function start() {
     try {
       await workspace.open(config)
+      await workspace.renameRecent(api.describe(config), alias)
     } catch (failure) {
       probe = { tone: "bad", text: friendly(String(failure)) }
     }
@@ -200,6 +235,10 @@
   onbrowseKey={pickKey}
   tunnelled={overHost}
   databases={catalogue}
+  {keyFiles}
+  {localPortTaken}
+  {alias}
+  onalias={next => (alias = next)}
   labels={{
     database: m.field_database(),
     credentials: m.field_credentials(),
@@ -208,7 +247,6 @@
     readOnlyHint: m.read_only_hint(),
     connect: m.connect(),
     save: m.save_connection(),
-    keys: m.keys_hint(),
     browse: m.browse(),
     tlsAuto: m.tls_auto(),
     tlsVerify: m.tls_verify(),
@@ -218,6 +256,13 @@
     tunnelHost: m.tunnel_host(),
     tunnelUser: m.tunnel_user(),
     tunnelKey: m.tunnel_key(),
+    tunnelPort: m.tunnel_port(),
+    tunnelLocal: m.tunnel_local(),
+    tunnelPicks: m.tunnel_picks(),
+    tunnelBusyPort: m.tunnel_busy_port(),
+    alias: m.field_alias(),
+    aliasHint: m.alias_hint(),
+    viaHop: m.via_hop(),
     tunnelPassword: m.tunnel_password(),
     tunnelPassphrase: m.tunnel_passphrase(),
   }}

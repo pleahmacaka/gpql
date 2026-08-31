@@ -44,7 +44,9 @@
   ontab={pick}
   onsettings={onOpenSettings}
   agentOn={workspace.chat.dock === "panel"}
-  onagent={() => workspace.chat.show("panel")}
+  onagent={workspace.agentReady
+    ? () => workspace.chat.show("panel")
+    : undefined}
 >
   {#snippet controls()}
     <WindowControls />

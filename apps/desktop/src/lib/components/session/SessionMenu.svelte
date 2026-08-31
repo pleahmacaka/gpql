@@ -99,11 +99,10 @@
       <ListRow
         icon={workspace.iconFor(entry.handle.kind)}
         title={entry.label}
-        detail={entry.handle.detail}
-        trailing={entry.id === workspace.active?.id
-          ? "lucide:check"
-          : "lucide:arrow-right"}
+        detail={entry.writes.open ? m.tx_open() : entry.handle.detail}
+        trailing={null}
         onclick={() => jump(entry.id)}
+        ondismiss={() => workspace.close(entry.id)}
       />
     {/each}
 
@@ -134,7 +133,6 @@
         busy={workspace.dialing === entry.url}
         shaking={shaking === entry.url}
         onclick={() => resume(entry.url)}
-        ondismiss={() => workspace.forgetRecent(entry.url)}
       />
     {/each}
   {/if}

@@ -30,6 +30,7 @@ export interface BackendInfo {
   icon: string
   port: string
   fields: BackendField[]
+  wip: boolean
 }
 
 export interface SessionHop {
@@ -39,6 +40,7 @@ export interface SessionHop {
   password: string
   keyPath: string
   passphrase: string
+  localPort: string
 }
 
 export interface SessionDraft {

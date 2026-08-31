@@ -77,7 +77,7 @@
     class="flex w-full items-center justify-center gap-2 rounded-field
       bg-base-200 py-2 text-sm hover:bg-base-300"
   >
-    <Icon icon="lucide:refresh-cw" class="size-3.5" />
+    <Icon icon="lucide:refresh-cw" class="size-4" />
     {m.scan_again()}
   </button>
 </div>

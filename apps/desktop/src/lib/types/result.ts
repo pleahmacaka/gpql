@@ -33,6 +33,13 @@ export interface Slice {
   offset: number
   sort?: TableSort | null
   filters?: { column: string; op: FilterOp; value: string }[]
+  columns?: string[]
+}
+
+export interface QueryShape {
+  range: string
+  every: string
+  func: string
 }
 
 export type ExportFormat = "csv" | "json" | "sql"

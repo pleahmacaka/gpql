@@ -5,7 +5,7 @@
     icon: string
     title: string
     detail?: string
-    trailing?: string
+    trailing?: string | null
     tone?: "plain" | "bad"
     shaking?: boolean
     busy?: boolean
@@ -62,7 +62,7 @@
     </span>
   </button>
 
-  <span class="flex w-20 shrink-0 items-center justify-end gap-0.5 pr-3">
+  <span class="flex w-20 shrink-0 items-center justify-end gap-1 pr-3">
     {#if onedit}
       <button
         type="button"
@@ -72,7 +72,7 @@
           text-base-content/30 opacity-0 group-hover:opacity-100
           hover:text-primary focus-visible:opacity-100"
       >
-        <Icon icon="lucide:pencil" class="size-3.5" />
+        <Icon icon="lucide:pencil" class="size-4" />
       </button>
     {/if}
 
@@ -85,7 +85,7 @@
           text-base-content/30 opacity-0 group-hover:opacity-100
           hover:text-error focus-visible:opacity-100"
       >
-        <Icon icon="lucide:x" class="size-3.5" />
+        <Icon icon="lucide:x" class="size-4" />
       </button>
     {/if}
 
@@ -94,7 +94,7 @@
         icon="lucide:loader-circle"
         class="size-4 animate-spin text-base-content/50"
       />
-    {:else}
+    {:else if trailing}
       <Icon
         icon={trailing}
         class="size-4 text-base-content/30 group-hover:text-base-content/60"

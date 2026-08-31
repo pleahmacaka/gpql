@@ -1,5 +1,5 @@
-import { board } from "@gpql/ui"
-import { desc, eq } from "drizzle-orm"
+import { board, rem } from "@gpql/ui"
+import { asc, desc, eq } from "drizzle-orm"
 
 import { local } from "$lib/db/client"
 import { migrate } from "$lib/db/migrate"
@@ -14,11 +14,13 @@ import type {
   Provider,
   SavedLogin,
   SessionConfig,
+  SharedErd,
   Tab,
 } from "$lib/types"
 import * as api from "./commands"
 import { blankConfig } from "./commands"
 import { Connection, type ConnectionHost, idle } from "./connection.svelte"
+import { foldersOf } from "./connections"
 import { friendly } from "./errors"
 
 const PAGE = 1000
@@ -46,6 +48,10 @@ function tail(url: string) {
   return url.slice(url.indexOf("://") + 3)
 }
 
+function hopping(config: SessionConfig) {
+  return (config.tunnel?.host ?? "").trim() !== ""
+}
+
 function configFrom(login: SavedLogin, readOnly: boolean): SessionConfig {
   return {
     ...blankConfig(login.kind),
@@ -61,6 +67,7 @@ function configFrom(login: SavedLogin, readOnly: boolean): SessionConfig {
     tls: login.tls,
     warehouse: login.warehouse,
     schema: login.schema,
+    tunnel: login.tunnel ?? blankConfig(login.kind).tunnel,
     readOnly,
   }
 }
@@ -94,6 +101,7 @@ export class Workspace {
   startup = $state<"last" | "recent">("last")
 
   recents = $state<(typeof recent.$inferSelect)[]>([])
+  connectionView = $state<"list" | "grid">("list")
   finding = $state(false)
   notice = $state("")
   ddl = $state<{ name: string; text: string } | null>(null)
@@ -103,7 +111,7 @@ export class Workspace {
   presets = $state<Credential[]>([])
   catalog = $state<BackendInfo[]>([])
   servers = $state<string[]>([])
-  shared = $state("")
+  shared = $state<SharedErd | null>(null)
   connecting = $state(false)
   adding = $state(false)
   unreachable = $state<Record<string, string>>({})
@@ -118,6 +126,8 @@ export class Workspace {
 
   private wiring: ConnectionHost = {
     pageSize: () => this.rowLimit,
+    dialect: kind =>
+      this.catalog.find(entry => entry.id === kind)?.dialect ?? "sql",
     provider: () => this.model,
     remember: (key, value) => this.remember(key, value),
     steer: async (connection, move) => {
@@ -255,7 +265,7 @@ export class Workspace {
   }
 
   get rowHeight() {
-    return this.compact ? 26 : 34
+    return rem(this.compact ? 1.5 : 2)
   }
 
   async boot() {
@@ -279,6 +289,8 @@ export class Workspace {
     this.rowLimit = Number(settings.get("rowLimit") ?? PAGE) || PAGE
     this.settled = settings.get("settled") === "yes"
     this.startup = settings.get("startup") === "recent" ? "recent" : "last"
+    this.connectionView =
+      settings.get("connectionView") === "grid" ? "grid" : "list"
     this.writes.load(settings)
 
     const side = settings.get("orbSide")
@@ -501,10 +513,45 @@ export class Workspace {
     this.recents = await local
       .select()
       .from(recent)
-      .orderBy(desc(recent.openedAt))
-      .limit(8)
+      .orderBy(asc(recent.rank), desc(recent.openedAt))
+      .limit(100)
 
     await this.sniff()
+  }
+
+  // dragging writes a rank for every row at once, so a later insert with the
+  // default rank of zero still lands at the top where a new connection belongs
+  async reorderRecents(urls: string[]) {
+    this.recents = urls
+      .map(url => this.recents.find(entry => entry.url === url))
+      .filter(entry => entry !== undefined)
+
+    for (const [at, entry] of this.recents.entries()) {
+      await local
+        .update(recent)
+        .set({ rank: at + 1 })
+        .where(eq(recent.url, entry.url))
+    }
+  }
+
+  async groupRecent(url: string, folder: string) {
+    const named = folder.trim()
+
+    await local
+      .update(recent)
+      .set({ folder: named === "" ? null : named })
+      .where(eq(recent.url, url))
+
+    await this.reloadRecents()
+  }
+
+  get folders() {
+    return foldersOf(this.recents)
+  }
+
+  async setConnectionView(view: "list" | "grid") {
+    this.connectionView = view
+    await this.remember("connectionView", view)
   }
 
   async sniff() {
@@ -552,12 +599,36 @@ export class Workspace {
     )
   }
 
+  async setShareOpen(site: string, open: boolean) {
+    if (!this.shared) {
+      return
+    }
+
+    const answer = await api.run(api.shareErd(site, this.shared.id, open))
+
+    this.shared = { ...this.shared, open: answer }
+  }
+
   async reloadCatalog() {
     this.catalog = await api.run(api.backends())
   }
 
   async reloadPresets() {
     this.presets = await api.run(api.credentials())
+  }
+
+  // the agent answers from the open database and steers the tabs, so outside a
+  // live session there is nothing for it to read or move
+  get agentReady() {
+    return (
+      this.settled &&
+      !!this.session &&
+      !this.connecting &&
+      !this.adding &&
+      !this.erd &&
+      this.ai &&
+      !!this.model
+    )
   }
 
   get model() {
@@ -644,11 +715,17 @@ export class Workspace {
           kind: handle.kind,
           label: handle.label,
           detail: handle.detail,
+          tunnelled: hopping(config) ? 1 : 0,
           openedAt: stamp,
         })
         .onConflictDoUpdate({
           target: recent.url,
-          set: { openedAt: stamp, label: handle.label, detail: handle.detail },
+          set: {
+            openedAt: stamp,
+            label: handle.label,
+            detail: handle.detail,
+            tunnelled: hopping(config) ? 1 : 0,
+          },
         })
 
       const stale = this.editing
@@ -740,10 +817,22 @@ export class Workspace {
 
     await local
       .insert(recent)
-      .values({ url, kind: config.kind, label, detail, openedAt: stamp })
+      .values({
+        url,
+        kind: config.kind,
+        label,
+        detail,
+        tunnelled: hopping(config) ? 1 : 0,
+        openedAt: stamp,
+      })
       .onConflictDoUpdate({
         target: recent.url,
-        set: { openedAt: stamp, label, detail },
+        set: {
+          openedAt: stamp,
+          label,
+          detail,
+          tunnelled: hopping(config) ? 1 : 0,
+        },
       })
 
     this.editing = null
