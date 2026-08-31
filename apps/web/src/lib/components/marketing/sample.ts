@@ -26,6 +26,7 @@ export const backends = [
       { key: "password", label: "Password", placeholder: "", secret: true },
       { key: "database", label: "Database", placeholder: "", secret: false },
     ],
+    wip: false,
   },
   {
     id: "mysql",
@@ -34,6 +35,7 @@ export const backends = [
     icon: "lucide:database",
     port: "3306",
     fields: [],
+    wip: false,
   },
   {
     id: "clickhouse",
@@ -42,6 +44,7 @@ export const backends = [
     icon: "lucide:bar-chart-3",
     port: "8123",
     fields: [],
+    wip: true,
   },
   {
     id: "neo4j",
@@ -50,6 +53,7 @@ export const backends = [
     icon: "lucide:git-fork",
     port: "7474",
     fields: [],
+    wip: true,
   },
 ]
 
@@ -292,24 +296,82 @@ export const tables: SchemaTable[] = [
 ]
 
 export const engines = [
-  { name: "PostgreSQL", icon: "simple-icons:postgresql", note: "rustls" },
-  { name: "MySQL", icon: "simple-icons:mysql", note: "native wire" },
-  { name: "SQLite", icon: "simple-icons:sqlite", note: "file" },
-  { name: "DuckDB", icon: "simple-icons:duckdb", note: "bundled" },
-  { name: "Supabase", icon: "simple-icons:supabase", note: "postgres wire" },
-  { name: "GreptimeDB", icon: "simple-icons:greptimedb", note: "port 4003" },
+  {
+    name: "PostgreSQL",
+    icon: "simple-icons:postgresql",
+    note: "rustls",
+  },
+  {
+    name: "MySQL",
+    icon: "simple-icons:mysql",
+    note: "native wire",
+  },
+  {
+    name: "SQLite",
+    icon: "simple-icons:sqlite",
+    note: "file",
+  },
+  {
+    name: "DuckDB",
+    icon: "simple-icons:duckdb",
+    note: "bundled",
+  },
+  {
+    name: "Supabase",
+    icon: "simple-icons:supabase",
+    note: "postgres wire",
+  },
+  {
+    name: "GreptimeDB",
+    icon: "simple-icons:greptimedb",
+    note: "port 4003",
+  },
+  {
+    name: "InfluxDB 3",
+    icon: "simple-icons:influxdb",
+    note: "arrow flight",
+  },
+  {
+    name: "InfluxDB 2",
+    icon: "simple-icons:influxdb",
+    note: "flux",
+  },
   {
     name: "ClickHouse",
     icon: "simple-icons:clickhouse",
     note: "native client",
+    wip: true,
   },
-  { name: "Turso", icon: "simple-icons:turso", note: "libsql" },
-  { name: "InfluxDB 3", icon: "simple-icons:influxdb", note: "arrow flight" },
-  { name: "InfluxDB 2", icon: "simple-icons:influxdb", note: "flux" },
-  { name: "Snowflake", icon: "simple-icons:snowflake", note: "account auth" },
-  { name: "Neo4j", icon: "simple-icons:neo4j", note: "bolt" },
-  { name: "FalkorDB", icon: "simple-icons:redis", note: "cypher" },
-  { name: "Cloudflare D1", icon: "simple-icons:cloudflare", note: "http api" },
+  {
+    name: "Turso",
+    icon: "simple-icons:turso",
+    note: "libsql",
+    wip: true,
+  },
+  {
+    name: "Snowflake",
+    icon: "simple-icons:snowflake",
+    note: "account auth",
+    wip: true,
+  },
+  {
+    name: "Neo4j",
+    icon: "simple-icons:neo4j",
+    note: "bolt",
+    wip: true,
+  },
+  {
+    name: "FalkorDB",
+    icon: "simple-icons:redis",
+    note: "cypher",
+    wip: true,
+  },
+  {
+    name: "Cloudflare D1",
+    icon: "simple-icons:cloudflare",
+    note: "http api",
+    wip: true,
+  },
 ]
 
 export const ask = [

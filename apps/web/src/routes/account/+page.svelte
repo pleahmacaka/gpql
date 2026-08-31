@@ -51,7 +51,7 @@
         onclick={() => start("github")}
         disabled={starting}
         class="flex w-full items-center justify-center gap-2 rounded-field
-          bg-neutral py-2.5 text-sm text-neutral-content hover:bg-neutral/90
+          bg-neutral py-3 text-sm text-neutral-content hover:bg-neutral/90
           disabled:opacity-60"
       >
         <Icon

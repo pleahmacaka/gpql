@@ -14,7 +14,7 @@ export function reveal(node: HTMLElement) {
         }
       }
     },
-    { rootMargin: "0px 0px -10% 0px", threshold: 0.05 },
+    { rootMargin: "0% 0% -10% 0%", threshold: 0.05 },
   )
 
   watcher.observe(node)

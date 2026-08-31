@@ -36,7 +36,7 @@
   <div class="relative mx-auto max-w-5xl px-4 pb-24 sm:px-6">
     <div class="sticky top-0 z-40 -mx-4 px-4 pt-2 pb-3 sm:-mx-6 sm:px-6">
       <nav
-        class="flex items-center gap-1 rounded-box bg-base-100/80 p-1.5 pl-3
+        class="flex items-center gap-1 rounded-box bg-base-100/80 p-2 pl-3
           text-sm backdrop-blur-lg lift"
       >
         <a
@@ -51,7 +51,7 @@
         {#each [{ href: "#engines", label: "Databases" }, { href: "#screens", label: "Screens" }, { href: "#sync", label: "Sync" }] as link (link.href)}
           <a
             href={link.href}
-            class="hidden rounded-field px-3 py-1.5 text-base-content/60
+            class="hidden rounded-field px-3 py-2 text-base-content/60
               transition-colors hover:bg-base-200 hover:text-base-content
               sm:block"
           >
@@ -63,7 +63,7 @@
 
         <a
           href="/download"
-          class="hidden rounded-field px-3 py-1.5 text-base-content/60
+          class="hidden rounded-field px-3 py-2 text-base-content/60
             transition-colors hover:bg-base-200 hover:text-base-content sm:block"
         >
           Download
@@ -71,7 +71,7 @@
 
         <a
           href="/account"
-          class="rounded-field bg-base-200 px-3 py-1.5 transition-colors
+          class="rounded-field bg-base-200 px-3 py-2 transition-colors
             hairline hover:bg-base-300"
         >
           Account
@@ -98,7 +98,7 @@
         <div class="flex flex-wrap items-center gap-3 pt-7">
           <a
             href="https://github.com/pleahmacaka/gpql/releases/latest"
-            class="flex items-center gap-2 rounded-field bg-primary px-4 py-2.5
+            class="flex items-center gap-2 rounded-field bg-primary px-4 py-3
               text-sm text-primary-content transition-colors hover:bg-primary/90"
           >
             <Icon icon="lucide:download" class="size-4" />
@@ -107,7 +107,7 @@
 
           <a
             href="#engines"
-            class="rounded-field bg-base-100 px-4 py-2.5 text-sm hairline
+            class="rounded-field bg-base-100 px-4 py-3 text-sm hairline
               transition-colors hover:bg-base-300"
           >
             See the drivers
@@ -131,7 +131,6 @@
 
               <SessionCard
                 bind:draft
-                labels={{ keys: "" }}
                 backends={sample.backends}
                 probe={{ tone: "good", text: "PostgreSQL 18.4 answered in 6 ms" }}
                 {readOnly}
@@ -158,13 +157,24 @@
       <ul class="grid grid-cols-2 gap-2 pt-8 sm:grid-cols-3 lg:grid-cols-4">
         {#each sample.engines as engine (engine.name)}
           <li
-            class="flex items-center gap-3 rounded-field bg-base-100 px-3 py-2.5
+            class="flex items-center gap-3 rounded-field bg-base-100 px-3 py-3
               hairline transition-colors hover:bg-base-300"
           >
             <Icon icon={engine.icon} class="size-4 shrink-0" />
 
             <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm">{engine.name}</span>
+              <span class="flex items-center gap-2">
+                <span class="truncate text-sm">{engine.name}</span>
+
+                {#if engine.wip}
+                  <span
+                    class="shrink-0 rounded-selector bg-base-300 px-2 font-mono
+                      text-xs text-base-content/45"
+                  >
+                    wip
+                  </span>
+                {/if}
+              </span>
 
               <span class="block font-mono text-xs text-base-content/40">
                 {engine.note}
@@ -207,12 +217,12 @@
               <aside class="w-52 shrink-0 rounded-box bg-base-100 p-2 lift">
                 {#each sample.tables as table (table.name)}
                   <div
-                    class="flex items-center gap-2 rounded-field px-2 py-1.5
+                    class="flex items-center gap-2 rounded-field px-2 py-2
                       text-sm {table.name === 'message'
                       ? 'bg-primary/10 text-primary'
                       : ''}"
                   >
-                    <Icon icon="lucide:table-2" class="size-3.5 opacity-60" />
+                    <Icon icon="lucide:table-2" class="size-4 opacity-60" />
                     <span class="flex-1 truncate">{table.name}</span>
                     <span class="text-xs text-base-content/40">{table.rows}</span>
                   </div>
@@ -233,7 +243,7 @@
 
                   <div
                     class="flex gap-1 self-center rounded-selector bg-base-200
-                      p-0.5"
+                      p-1"
                   >
                     {#each [{ id: "table", icon: "lucide:table-2" }, { id: "chart", icon: "lucide:bar-chart-3" }] as option (option.id)}
                       <button
@@ -246,7 +256,7 @@
                           ? 'bg-base-100 hairline'
                           : 'text-base-content/45'}"
                       >
-                        <Icon icon={option.icon} class="size-3.5" />
+                        <Icon icon={option.icon} class="size-4" />
                       </button>
                     {/each}
                   </div>
@@ -289,7 +299,7 @@
                   class="flex items-center gap-2 rounded-field bg-base-200 px-3
                     py-2"
                 >
-                  <Icon icon="lucide:sparkles" class="size-3.5 text-accent" />
+                  <Icon icon="lucide:sparkles" class="size-4 text-accent" />
 
                   <span class="flex-1 text-sm text-base-content/70">
                     {sample.ask[0].text}
@@ -299,7 +309,7 @@
                 <Sql code={sample.ask[1].text} />
 
                 <p
-                  class="flex items-center gap-1.5 font-mono text-xs
+                  class="flex items-center gap-2 font-mono text-xs
                     text-base-content/45"
                 >
                   <Icon icon="lucide:play" class="size-3" />
@@ -349,8 +359,9 @@
       </h2>
 
       <p class="max-w-2xl pt-4 text-base-content/65">
-        Open staging beside production. Each tab keeps its own tables, query
+        Open staging beside production. Each one keeps its own tables, query
         buffer and history, so nothing you run in one shows up in the other.
+        The session chip switches between them.
       </p>
 
       <p class="max-w-2xl pt-3 text-base-content/65">
@@ -414,7 +425,7 @@
 
         <a
           href="/account"
-          class="mt-5 block rounded-field bg-primary py-2.5 text-center text-sm
+          class="mt-5 block rounded-field bg-primary py-3 text-center text-sm
             text-primary-content transition-colors hover:bg-primary/90"
         >
           Sign in with GitHub

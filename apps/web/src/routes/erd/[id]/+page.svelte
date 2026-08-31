@@ -26,7 +26,7 @@
     <span class="flex-1"></span>
 
     <span class="flex items-center gap-2 text-xs text-base-content/45">
-      <Icon icon="lucide:users" class="size-3.5" />
+      <Icon icon="lucide:users" class="size-4" />
       {data.who}
     </span>
   </header>
