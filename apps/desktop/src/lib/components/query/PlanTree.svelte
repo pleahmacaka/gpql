@@ -18,7 +18,7 @@
 </script>
 
 <div class="text-xs" style:padding-left="{depth > 0 ? 1 : 0}rem">
-  <div class="flex items-center gap-1.5 py-0.5">
+  <div class="flex items-center gap-2 py-1">
     {#if node.children.length > 0}
       <button
         type="button"

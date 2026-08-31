@@ -97,7 +97,7 @@
                 : entry.state === "dropped"
                   ? "lucide:minus"
                   : "lucide:pencil"}
-              class="size-3.5 shrink-0"
+              class="size-4 shrink-0"
             />
             {entry.table}
           </p>

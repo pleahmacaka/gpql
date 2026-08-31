@@ -40,12 +40,13 @@
         | "think"
         | "nothing"
         | "rest"
-        | "define",
+        | "define"
+        | "cancel",
         string
       >
     >
     onselect?: (table: string) => void
-    onsuggest?: () => Promise<TableGroup[]> | TableGroup[]
+    onsuggest?: (signal: AbortSignal) => Promise<TableGroup[]> | TableGroup[]
     onlayout?: (layout: {
       spots: Record<string, { x: number; y: number }>
       groups: TableGroup[]
@@ -75,6 +76,7 @@
     nothing: labels.nothing ?? "the model found no grouping worth keeping",
     rest: labels.rest ?? "everything else",
     define: labels.define ?? "Show definition",
+    cancel: labels.cancel ?? "Cancel",
   })
 
   let armed = $state(false)
@@ -263,19 +265,27 @@
     regroup()
   }
 
-  let thinking = $state(false)
+  let thinking = $state<AbortController | null>(null)
   let notice = $state("")
 
   async function suggest() {
-    if (!onsuggest || thinking) {
+    if (thinking) {
+      thinking.abort()
+
       return
     }
 
-    thinking = true
+    if (!onsuggest) {
+      return
+    }
+
+    const stopper = new AbortController()
+
+    thinking = stopper
     notice = ""
 
     try {
-      const found = await onsuggest()
+      const found = await onsuggest(stopper.signal)
 
       if (found.length === 0) {
         notice = words.nothing
@@ -286,9 +296,13 @@
       board.groups = found
       regroup()
     } catch (failure) {
-      notice = String(failure).replace(/^Error:\s*/, "")
+      if (!stopper.signal.aborted) {
+        notice = String(failure).replace(/^Error:\s*/, "")
+      }
     } finally {
-      thinking = false
+      if (thinking === stopper) {
+        thinking = null
+      }
     }
   }
 
@@ -513,6 +527,14 @@
       return
     }
 
+    if (event.key === "Escape" && (armed || thinking)) {
+      event.preventDefault()
+      armed = false
+      thinking?.abort()
+
+      return
+    }
+
     const steps: Record<string, () => void> = {
       ArrowDown: () => move(1, "row"),
       ArrowUp: () => move(-1, "row"),
@@ -588,10 +610,10 @@
           <button
             type="button"
             onclick={makeGroup}
-            class="flex items-center gap-1.5 rounded-field bg-base-100 px-2 py-1
+            class="flex items-center gap-2 rounded-field bg-base-100 px-2 py-1
               text-xs hairline hover:bg-base-300"
           >
-            <Icon icon="lucide:group" class="size-3.5" />
+            <Icon icon="lucide:group" class="size-4" />
             {words.group}
           </button>
         {/if}
@@ -600,27 +622,26 @@
           <button
             type="button"
             onclick={suggest}
-            disabled={thinking}
-            class="flex items-center gap-1.5 rounded-field bg-base-100 px-2 py-1
-              text-xs hairline hover:bg-base-300 disabled:opacity-60"
+            class="flex items-center gap-2 rounded-field bg-base-100 px-2 py-1
+              text-xs hairline hover:bg-base-300"
           >
             <Icon
               icon={thinking ? "lucide:loader-circle" : "lucide:sparkles"}
-              class="size-3.5 {thinking ? 'animate-spin' : 'text-accent'}"
+              class="size-4 {thinking ? 'animate-spin' : 'text-accent'}"
             />
-            {words.think}
+            {thinking ? words.cancel : words.think}
           </button>
         {/if}
 
         <button
           type="button"
           onclick={board.picked.length > 0 ? arrangePicked : arrangeAll}
-          class="flex items-center gap-1.5 rounded-field px-2 py-1 text-xs
+          class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
             hairline {armed
             ? 'bg-primary text-primary-content'
             : 'bg-base-100 hover:bg-base-300'}"
         >
-          <Icon icon="lucide:wand-sparkles" class="size-3.5" />
+          <Icon icon="lucide:wand-sparkles" class="size-4" />
           {board.picked.length > 0 ? words.picked : words.auto}
         </button>
       </div>
@@ -635,12 +656,14 @@
       {/if}
 
       {#if armed && board.picked.length === 0}
-        <p
+        <button
+          type="button"
+          onclick={() => (armed = false)}
           class="max-w-72 rounded-field floating px-2 py-1 text-right text-xs
-            break-keep text-base-content/60 lift"
+            break-keep text-base-content/60 lift hover:text-base-content"
         >
-          {words.warn}
-        </p>
+          {words.warn} · {words.cancel}
+        </button>
       {/if}
 
       {#if board.groups.length > 0}
@@ -650,7 +673,7 @@
               class="flex items-center gap-1 rounded-selector bg-primary/10 pr-1
                 pl-2 text-xs text-primary"
             >
-              <span class="py-0.5">{group.name}</span>
+              <span class="py-1">{group.name}</span>
 
               <span class="opacity-60">{group.tables.length}</span>
 
@@ -658,7 +681,7 @@
                 type="button"
                 aria-label="{words.ungroup} {group.name}"
                 onclick={() => dropGroup(group.id)}
-                class="rounded-selector p-0.5 opacity-60 hover:opacity-100"
+                class="rounded-selector p-1 opacity-60 hover:opacity-100"
               >
                 <Icon icon="lucide:x" class="size-3" />
               </button>

@@ -34,22 +34,32 @@
 
   <h2 class="pt-4 font-display text-xl font-medium">GPQL</h2>
 
-  <p class="pt-1 text-xs text-base-content/45">
-    {m.about_version({ version })}
-  </p>
+  <div class="flex items-center gap-2 pt-1">
+    <p class="text-xs text-base-content/45">{m.about_version({ version })}</p>
+
+    {#if import.meta.env.DEV}
+      <span
+        class="inline-flex items-center gap-1 rounded-selector bg-warning/15
+          px-2 py-1 font-mono text-xs tracking-wide text-warning uppercase"
+      >
+        <Icon icon="lucide:hammer" class="size-3" />
+        dev
+      </span>
+    {/if}
+  </div>
 
   <div class="flex items-center gap-2 pt-5">
     <button
       type="button"
       onclick={check}
       disabled={checking}
-      class="flex items-center gap-1.5 rounded-field bg-base-200 px-3 py-1.5
+      class="flex items-center gap-2 rounded-field bg-base-200 px-3 py-2
         text-sm transition-colors hover:bg-base-300 disabled:opacity-60"
     >
       {#if checking}
-        <Icon icon="lucide:loader-circle" class="size-3.5 animate-spin" />
+        <Icon icon="lucide:loader-circle" class="size-4 animate-spin" />
       {:else}
-        <Icon icon="lucide:refresh-cw" class="size-3.5" />
+        <Icon icon="lucide:refresh-cw" class="size-4" />
       {/if}
       {checking
         ? m.update_checking()
@@ -66,10 +76,10 @@
       <button
         type="button"
         onclick={() => openUrl(found?.link ?? REPO)}
-        class="flex items-center gap-1.5 rounded-field bg-primary px-3 py-1.5
+        class="flex items-center gap-2 rounded-field bg-primary px-3 py-2
           text-sm text-primary-content transition-colors hover:bg-primary/90"
       >
-        <Icon icon="lucide:download" class="size-3.5" />
+        <Icon icon="lucide:download" class="size-4" />
         {m.update_get()}
       </button>
     {/if}

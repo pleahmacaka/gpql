@@ -61,7 +61,7 @@
         >
           <Icon
             icon="lucide:star"
-            class="size-3 shrink-0 fill-current text-accent"
+            class="solid size-4 shrink-0 text-accent"
           />
 
           <span class="min-w-0 flex-1 truncate text-sm">{name}</span>
@@ -119,7 +119,7 @@
         >
           <Icon
             icon={entry.ok ? "lucide:check" : "lucide:x"}
-            class="mt-0.5 size-3 shrink-0 {entry.ok
+            class="mt-1 size-3 shrink-0 {entry.ok
               ? 'text-success/70'
               : 'text-error'}"
           />
@@ -164,7 +164,7 @@
           class="mr-2 p-1 text-base-content/30 opacity-0 group-hover:opacity-100
             hover:text-error focus-visible:opacity-100"
         >
-          <Icon icon="lucide:x" class="size-3.5" />
+          <Icon icon="lucide:x" class="size-4" />
         </button>
       </div>
     {/each}

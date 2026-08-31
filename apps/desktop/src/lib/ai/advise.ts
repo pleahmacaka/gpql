@@ -62,12 +62,14 @@ schema supports; do not guess at business rules that are not visible.`
 export async function describeTables(
   provider: Provider,
   schema: TableSchema[],
+  abortSignal?: AbortSignal,
 ): Promise<Record<string, string>> {
   const answer = await generateText({
     model: modelOf(provider),
     output: Output.object({ schema: NOTES }),
     system: DESCRIBE,
     prompt: outline(schema),
+    abortSignal,
   })
 
   return Object.fromEntries(

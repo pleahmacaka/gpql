@@ -174,7 +174,7 @@
 
         {#if provider}
           <span
-            class="rounded-selector bg-success/15 px-2 py-0.5 text-xs
+            class="rounded-selector bg-success/15 px-2 py-1 text-xs
               text-success"
           >
             {m.provider_linked()}
@@ -183,7 +183,7 @@
 
         {#if chosen}
           <span
-            class="rounded-selector bg-primary/15 px-2 py-0.5 text-xs
+            class="rounded-selector bg-primary/15 px-2 py-1 text-xs
               text-primary"
           >
             {m.provider_chosen()}
@@ -259,12 +259,12 @@
           disabled={linking === shop.id}
           onclick={() => connect(shop.id)}
           class="mt-3 flex w-full items-center justify-center gap-2 rounded-field
-            bg-base-100 py-1.5 text-sm hairline hover:bg-base-300
+            bg-base-100 py-2 text-sm hairline hover:bg-base-300
             disabled:opacity-60"
         >
           <Icon
             icon={shop.oauth ? "lucide:log-in" : "lucide:key-round"}
-            class="size-3.5"
+            class="size-4"
           />
           {shop.oauth ? m.provider_connect() : m.provider_key()}
         </button>
@@ -288,7 +288,7 @@
 
       {#if chosen}
         <span
-          class="rounded-selector bg-primary/15 px-2 py-0.5 text-xs text-primary"
+          class="rounded-selector bg-primary/15 px-2 py-1 text-xs text-primary"
         >
           {m.provider_chosen()}
         </span>
@@ -362,7 +362,7 @@
       <button
         type="button"
         onclick={() => (adding = false)}
-        class="flex-1 rounded-field py-1.5 text-sm hover:bg-base-300"
+        class="flex-1 rounded-field py-2 text-sm hover:bg-base-300"
       >
         {m.cancel()}
       </button>
@@ -370,7 +370,7 @@
       <button
         type="button"
         onclick={add}
-        class="flex-1 rounded-field bg-primary py-1.5 text-sm
+        class="flex-1 rounded-field bg-primary py-2 text-sm
           text-primary-content"
       >
         {m.save_credential()}
@@ -381,11 +381,11 @@
   <button
     type="button"
     onclick={() => (adding = true)}
-    class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-field
+    class="mt-2 flex w-full items-center justify-center gap-2 rounded-field
       border border-dashed border-base-content/15 py-2 text-sm
       text-base-content/50 hover:border-primary/40 hover:text-primary"
   >
-    <Icon icon="lucide:plus" class="size-3.5" />
+    <Icon icon="lucide:plus" class="size-4" />
     {m.provider_add()}
   </button>
 {/if}
@@ -405,8 +405,6 @@
     onclick={() => workspace.toggle("aiGroups")}
   />
 </section>
-
-<p class="px-1 pt-3 text-xs text-base-content/40">{m.models_note()}</p>
 
 {#if note}
   <p class="px-1 pt-2 text-xs text-base-content/45">{note}</p>

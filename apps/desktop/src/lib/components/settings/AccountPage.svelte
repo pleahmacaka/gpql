@@ -58,8 +58,6 @@
   }
 </script>
 
-<p class="pb-2 text-xs text-base-content/45">{m.sync_note()}</p>
-
 <div class="flex items-center gap-2">
   {#if workspace.signedIn}
     <button
@@ -92,7 +90,7 @@
 
 <div class="mt-4 space-y-2">
   {#each [{ scope: "local" as const, title: m.reset_local(), hint: m.reset_local_hint(), icon: "lucide:hard-drive" }, { scope: "cloud" as const, title: m.reset_cloud(), hint: m.reset_cloud_hint(), icon: "lucide:cloud-off" }] as entry (entry.scope)}
-    <div class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-2.5">
+    <div class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-3">
       <Icon icon={entry.icon} class="size-4 text-base-content/40" />
 
       <div class="min-w-0 flex-1">

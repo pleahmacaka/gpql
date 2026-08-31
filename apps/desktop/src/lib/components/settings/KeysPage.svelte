@@ -39,8 +39,6 @@
   ]
 </script>
 
-<p class="pb-4 text-xs text-base-content/45">{m.keys_note()}</p>
-
 <div class="space-y-5">
   {#each groups as group (group.title)}
     <section>

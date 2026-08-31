@@ -114,7 +114,7 @@
     <button
       type="button"
       onclick={onclose}
-      class="rounded-field px-3 py-1.5 text-sm text-base-content/60
+      class="rounded-field px-3 py-2 text-sm text-base-content/60
         hover:bg-base-200"
     >
       {m.cancel()}
@@ -124,12 +124,12 @@
       type="button"
       onclick={ask}
       disabled={workspace.busy || prompt.trim() === ""}
-      class="flex items-center gap-1.5 rounded-field bg-primary px-3 py-1.5
+      class="flex items-center gap-2 rounded-field bg-primary px-3 py-2
         text-sm text-primary-content hover:bg-primary/90
         disabled:bg-base-200 disabled:text-base-content/30"
     >
       {#if workspace.busy}
-        <Icon icon="lucide:loader-circle" class="size-3.5 animate-spin" />
+        <Icon icon="lucide:loader-circle" class="size-4 animate-spin" />
       {/if}
 
       {m.ask_write()}

@@ -49,6 +49,7 @@ function sketch(tables: TableSchema[]) {
 export async function suggestGroups(
   tables: TableSchema[],
   provider: Provider,
+  abortSignal?: AbortSignal,
 ): Promise<TableGroup[]> {
   if (tables.length < 3) {
     return []
@@ -66,6 +67,7 @@ export async function suggestGroups(
       system: BRIEF,
       prompt,
       repairText: async ({ text }) => carve(text) || null,
+      abortSignal,
     })
 
     groups = answer.object.groups
@@ -83,6 +85,7 @@ export async function suggestGroups(
 Answer with JSON only, shaped as
 {"groups":[{"name":"...","tables":["...","..."]}]}. No prose, no code fences.`,
       prompt,
+      abortSignal,
     })
 
     const read = SHAPE.safeParse(JSON.parse(carve(spoken.text) || "{}"))

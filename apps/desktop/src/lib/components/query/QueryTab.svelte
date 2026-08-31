@@ -2,7 +2,7 @@
   import * as m from "$lib/paraglide/messages"
 
   import ResultGrid from "$lib/components/data/ResultGrid.svelte"
-  import { Dropdown, Icon, Keycap, menu } from "@gpql/ui"
+  import { Dropdown, Icon, Keycap, Lazy, menu } from "@gpql/ui"
   import { FORMATS, exportResult } from "$lib/session/exporting"
   import { workspace } from "$lib/session/workspace.svelte"
   import type { ExportFormat } from "$lib/types"
@@ -11,11 +11,14 @@
   import TabLayout from "$lib/components/shell/TabLayout.svelte"
 
   import AskDialog from "./AskDialog.svelte"
+  import QueryBuilder from "./QueryBuilder.svelte"
   import SavedQueries from "./SavedQueries.svelte"
   import PlanPanel from "./PlanPanel.svelte"
   import SqlEditor from "./SqlEditor.svelte"
 
   let asking = $state(false)
+  let building = $state(false)
+  let charting = $state(false)
   let term = $state("")
   let hit = $state(0)
   let editor = $state<SqlEditor | null>(null)
@@ -106,6 +109,22 @@
     return () => clearTimeout(timer)
   })
 
+  // influx opens on the builder, the way its own data explorer does
+  $effect(() => {
+    if (workspace.dialect === "flux") {
+      building = true
+      void workspace.loadSchema()
+    }
+  })
+
+  async function build() {
+    building = !building
+
+    if (building) {
+      await workspace.loadSchema()
+    }
+  }
+
   async function shipOut(format: ExportFormat) {
     const session = workspace.session
     const result = workspace.query.result
@@ -150,8 +169,8 @@
         />
       {/if}
 
-      <span class="flex items-center gap-1.5">
-        <Icon icon="lucide:rows-4" class="size-3.5 text-base-content/35" />
+      <span class="flex items-center gap-2">
+        <Icon icon="lucide:rows-4" class="size-4 text-base-content/35" />
 
         <span class="text-xs text-base-content/40">{m.row_limit()}</span>
 
@@ -162,14 +181,62 @@
         />
       </span>
 
+      {#if workspace.session?.sliceable}
+        <span class="flex items-center gap-1 rounded-field bg-base-200 p-1">
+          <button
+            type="button"
+            onclick={() => building || build()}
+            aria-pressed={building}
+            class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
+              transition-colors {building
+              ? 'bg-primary/10 text-primary'
+              : 'hover:bg-base-300'}"
+          >
+            <Icon icon="lucide:blocks" class="size-4" />
+            {m.mode_builder()}
+          </button>
+
+          <button
+            type="button"
+            onclick={() => building && build()}
+            aria-pressed={!building}
+            class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
+              transition-colors {building
+              ? 'hover:bg-base-300'
+              : 'bg-primary/10 text-primary'}"
+          >
+            <Icon icon="lucide:code" class="size-4" />
+            {m.mode_script()}
+          </button>
+        </span>
+      {/if}
+
+      {#if workspace.query.result && workspace.query.result.rows.length > 0}
+        <button
+          type="button"
+          onclick={() => (charting = !charting)}
+          aria-pressed={charting}
+          class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
+            transition-colors {charting
+            ? 'bg-primary/10 text-primary'
+            : 'bg-base-200 hover:bg-base-300'}"
+        >
+          <Icon
+            icon={charting ? "lucide:table" : "lucide:chart-line"}
+            class="size-4"
+          />
+          {charting ? m.view_table() : m.view_chart()}
+        </button>
+      {/if}
+
       {#if workspace.ai && workspace.providers.length > 0}
         <button
           type="button"
           onclick={() => (asking = true)}
-          class="flex items-center gap-1.5 rounded-field bg-base-200 px-2 py-1
+          class="flex items-center gap-2 rounded-field bg-base-200 px-2 py-1
             text-xs transition-colors hover:bg-base-300"
         >
-          <Icon icon="lucide:sparkles" class="size-3.5 text-accent" />
+          <Icon icon="lucide:sparkles" class="size-4 text-accent" />
           {m.ai_write()}
         </button>
       {/if}
@@ -190,10 +257,10 @@
               run: () => workspace.query.explain(true),
             },
           ])}
-        class="flex items-center gap-1.5 rounded-field bg-base-200 px-2 py-1
+        class="flex items-center gap-2 rounded-field bg-base-200 px-2 py-1
           text-xs hover:bg-base-300 disabled:opacity-40"
       >
-        <Icon icon="lucide:git-fork" class="size-3.5" />
+        <Icon icon="lucide:git-fork" class="size-4" />
         {m.menu_explain()}
       </button>
 
@@ -210,10 +277,10 @@
                 run: () => shipOut(format),
               })),
             )}
-          class="flex items-center gap-1.5 rounded-field bg-base-200 px-2 py-1
+          class="flex items-center gap-2 rounded-field bg-base-200 px-2 py-1
             text-xs hover:bg-base-300"
         >
-          <Icon icon="lucide:download" class="size-3.5" />
+          <Icon icon="lucide:download" class="size-4" />
           {m.menu_export()}
         </button>
       {/if}
@@ -225,20 +292,28 @@
           workspace.query.run()
         }}
         disabled={workspace.busy || workspace.query.sql.trim() === ""}
-        class="flex items-center gap-1.5 rounded-field bg-primary px-2 py-1
+        class="flex items-center gap-2 rounded-field bg-primary px-2 py-1
           text-xs text-primary-content transition-colors hover:bg-primary/90
           disabled:bg-base-200 disabled:text-base-content/30
           {workspace.query.spot
           ? 'animate-pulse ring-2 ring-accent ring-offset-2 ring-offset-base-100'
           : ''}"
       >
-        <Icon icon="lucide:play" class="size-3.5" />
+        <Icon icon="lucide:play" class="size-4" />
         {picked ? m.run_picked() : m.run_all()}
         <Keycap keys={["ctrl", "enter"]} class="opacity-70" />
       </button>
     </header>
 
-    <div class="mx-3 rounded-field bg-base-200 px-3 pt-2 pb-1.5">
+    {#if building}
+      <QueryBuilder />
+    {/if}
+
+    <div
+      class="mx-3 rounded-field bg-base-200 px-3 pt-2 pb-2 {building
+        ? 'hidden'
+        : ''}"
+    >
       <SqlEditor
         bind:this={editor}
         bind:value={workspace.query.sql}
@@ -248,7 +323,7 @@
       />
 
       <p
-        class="flex items-center gap-1.5 pt-1 text-xs {workspace.query.error
+        class="flex items-center gap-2 pt-1 text-xs {workspace.query.error
           ? 'text-error'
           : 'text-base-content/40'}"
       >
@@ -259,6 +334,14 @@
 
     {#if workspace.query.plan}
       <PlanPanel />
+    {:else if charting && workspace.query.result}
+      <Lazy
+        load={() => import("@gpql/ui/data/ResultChart.svelte")}
+        props={{
+          columns: workspace.query.result.columns,
+          rows: workspace.query.result.rows,
+        }}
+      />
     {:else}
       <ResultGrid result={workspace.query.result} empty="" />
     {/if}

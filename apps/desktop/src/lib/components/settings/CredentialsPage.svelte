@@ -71,7 +71,7 @@
 
     <h3 class="flex-1 text-sm font-medium">{m.settings_credentials()}</h3>
 
-    <span class="rounded-selector bg-base-200 px-2 py-0.5 text-xs
+    <span class="rounded-selector bg-base-200 px-2 py-1 text-xs
       text-base-content/50">
       {mine.length}
     </span>
@@ -110,7 +110,7 @@
             class="rounded-selector p-1 text-base-content/30 opacity-0
               group-hover:opacity-100 hover:text-error focus-visible:opacity-100"
           >
-            <Icon icon="lucide:trash-2" class="size-3.5" />
+            <Icon icon="lucide:trash-2" class="size-4" />
           </button>
         {/if}
       </div>
@@ -121,25 +121,25 @@
         <input
           bind:value={draft.name}
           placeholder={m.field_name()}
-          class="w-full rounded-field bg-base-100 px-2 py-1.5 text-sm outline-none"
+          class="w-full rounded-field bg-base-100 px-2 py-2 text-sm outline-none"
         />
         <input
           bind:value={draft.user}
           placeholder={m.field_user()}
-          class="w-full rounded-field bg-base-100 px-2 py-1.5 text-sm outline-none"
+          class="w-full rounded-field bg-base-100 px-2 py-2 text-sm outline-none"
         />
         <input
           bind:value={draft.password}
           type="password"
           placeholder={m.field_password()}
-          class="w-full rounded-field bg-base-100 px-2 py-1.5 text-sm outline-none"
+          class="w-full rounded-field bg-base-100 px-2 py-2 text-sm outline-none"
         />
 
         <div class="flex gap-1 pt-1">
           <button
             type="button"
             onclick={() => (adding = false)}
-            class="flex-1 rounded-field py-1.5 text-sm hover:bg-base-300"
+            class="flex-1 rounded-field py-2 text-sm hover:bg-base-300"
           >
             {m.cancel()}
           </button>
@@ -147,7 +147,7 @@
           <button
             type="button"
             onclick={add}
-            class="flex-1 rounded-field bg-primary py-1.5 text-sm
+            class="flex-1 rounded-field bg-primary py-2 text-sm
               text-primary-content"
           >
             {m.save_credential()}
@@ -158,11 +158,11 @@
       <button
         type="button"
         onclick={() => (adding = true)}
-        class="flex w-full items-center justify-center gap-1.5 rounded-field
+        class="flex w-full items-center justify-center gap-2 rounded-field
           border border-dashed border-base-content/15 py-2 text-sm
           text-base-content/50 hover:border-primary/40 hover:text-primary"
       >
-        <Icon icon="lucide:plus" class="size-3.5" />
+        <Icon icon="lucide:plus" class="size-4" />
         {m.add()}
       </button>
     {/if}
@@ -209,16 +209,23 @@
           class="rounded-selector p-1 text-base-content/30 opacity-0
             group-hover:opacity-100 hover:text-error focus-visible:opacity-100"
         >
-          <Icon icon="lucide:trash-2" class="size-3.5" />
+          <Icon icon="lucide:trash-2" class="size-4" />
         </button>
       </div>
     {:else}
-      <p
-        class="rounded-field border border-dashed border-base-content/12 px-3
-          py-6 text-center text-xs text-base-content/40"
+      <div
+        class="flex flex-col items-center gap-2 rounded-field border
+          border-dashed border-base-content/12 px-3 py-7 text-center"
       >
-        {m.logins_empty()}
-      </p>
+        <span
+          class="grid size-8 place-items-center rounded-selector bg-base-200
+            text-base-content/35"
+        >
+          <Icon icon="lucide:shield-check" class="size-4" />
+        </span>
+
+        <p class="text-xs text-base-content/40">{m.logins_empty()}</p>
+      </div>
     {/each}
   </div>
 </section>

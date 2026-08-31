@@ -8,33 +8,46 @@
 
   import FindBar from "$lib/components/shell/FindBar.svelte"
   import TabLayout from "$lib/components/shell/TabLayout.svelte"
-  import { site } from "$lib/sync/client"
 
   import { Icon, board, relationCount } from "@gpql/ui"
   import DiffPanel from "./DiffPanel.svelte"
   import SchemaBoard from "./SchemaBoard.svelte"
+  import SharePanel from "./SharePanel.svelte"
 
   let relations = $derived(relationCount(workspace.schema))
 
   let diffing = $state(false)
-  let describing = $state(false)
+  let sharing = $state(false)
+  let describing = $state<AbortController | null>(null)
 
   async function annotate() {
     const provider = workspace.model
     const here = workspace.active
 
-    if (!provider || !here || describing) {
+    if (describing) {
+      describing.abort()
+
       return
     }
 
-    describing = true
+    if (!provider || !here) {
+      return
+    }
+
+    const stopper = new AbortController()
+
+    describing = stopper
 
     try {
-      await here.describe(provider)
+      await here.describe(provider, stopper.signal)
     } catch (failure) {
-      workspace.notice = String(failure)
+      if (!stopper.signal.aborted) {
+        workspace.notice = String(failure)
+      }
     } finally {
-      describing = false
+      if (describing === stopper) {
+        describing = null
+      }
     }
   }
   let term = $state("")
@@ -118,39 +131,29 @@
         />
       {/if}
 
-      <span class="text-xs text-base-content/40">{m.arrows_walk()}</span>
-
-      {#if workspace.signedIn}
-        <button
-          type="button"
-          onclick={() => workspace.publish(site)}
-          class="rounded-field px-2 py-0.5 text-xs text-primary hover:bg-base-200"
-        >
-          {m.share_erd()}
-        </button>
-      {:else}
-        <span class="text-xs text-base-content/35">{m.share_needs_login()}</span>
-      {/if}
-
-      {#if workspace.shared}
-        <span class="max-w-56 truncate font-mono text-xs text-base-content/40">
-          {workspace.shared}
-        </span>
-      {/if}
+      <button
+        type="button"
+        aria-pressed={sharing}
+        onclick={() => (sharing = !sharing)}
+        class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
+          {sharing ? 'bg-primary/10 text-primary' : 'bg-base-200 hover:bg-base-300'}"
+      >
+        <Icon icon="lucide:share-2" class="size-4" />
+        {m.share_erd()}
+      </button>
 
       {#if workspace.ai && workspace.model && workspace.active}
         <button
           type="button"
-          disabled={describing}
           onclick={annotate}
-          class="flex items-center gap-1.5 rounded-field bg-base-200 px-2 py-1
-            text-xs hover:bg-base-300 disabled:opacity-40"
+          class="flex items-center gap-2 rounded-field bg-base-200 px-2 py-1
+            text-xs hover:bg-base-300"
         >
           <Icon
             icon={describing ? "lucide:loader-circle" : "lucide:text-quote"}
-            class="size-3.5 {describing ? 'animate-spin' : ''}"
+            class="size-4 {describing ? 'animate-spin' : ''}"
           />
-          {m.schema_describe()}
+          {describing ? m.cancel() : m.schema_describe()}
         </button>
       {/if}
 
@@ -159,12 +162,12 @@
           type="button"
           aria-pressed={diffing}
           onclick={() => (diffing = !diffing)}
-          class="flex items-center gap-1.5 rounded-field px-2 py-1 text-xs
+          class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
             {diffing
             ? 'bg-primary/10 text-primary'
             : 'bg-base-200 hover:bg-base-300'}"
         >
-          <Icon icon="lucide:git-compare" class="size-3.5" />
+          <Icon icon="lucide:git-compare" class="size-4" />
           {m.tab_diff()}
         </button>
       {/if}
@@ -181,3 +184,7 @@
     </div>
   </section>
 </TabLayout>
+
+{#if sharing}
+  <SharePanel onclose={() => (sharing = false)} />
+{/if}

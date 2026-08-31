@@ -34,7 +34,7 @@
     }
   })
 
-  async function think() {
+  async function think(signal: AbortSignal) {
     const provider = workspace.model
 
     if (!workspace.ai || !provider) {
@@ -43,7 +43,7 @@
 
     const { suggestGroups } = await import("$lib/ai/grouping")
 
-    return await suggestGroups(workspace.schema, provider)
+    return await suggestGroups(workspace.schema, provider, signal)
   }
 </script>
 
@@ -61,6 +61,7 @@
     nothing: m.group_ai_none(),
     rest: m.group_rest(),
     define: m.menu_ddl(),
+    cancel: m.cancel(),
   }}
   keyboard={workspace.tab === "schema"}
   minimap={workspace.minimap}

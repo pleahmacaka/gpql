@@ -19,7 +19,7 @@
 
 <div class="flex min-h-0 flex-1 flex-col">
   <header class="flex items-center gap-2 px-4 pb-2">
-    <Icon icon="lucide:git-fork" class="size-3.5 text-base-content/40" />
+    <Icon icon="lucide:git-fork" class="size-4 text-base-content/40" />
 
     <h2 class="flex-1 text-xs text-base-content/45">
       {query.analyzed ? m.plan_measured() : m.plan_estimated()}
@@ -30,14 +30,14 @@
         type="button"
         disabled={query.advising}
         onclick={() => query.advise()}
-        class="flex items-center gap-1.5 rounded-field bg-base-200 px-2 py-1
+        class="flex items-center gap-2 rounded-field bg-base-200 px-2 py-1
           text-xs hover:bg-base-300 disabled:opacity-40"
       >
         <Icon
           icon={query.advising
             ? "lucide:loader-circle"
             : "lucide:stethoscope"}
-          class="size-3.5 {query.advising ? 'animate-spin' : ''}"
+          class="size-4 {query.advising ? 'animate-spin' : ''}"
         />
         {m.plan_diagnose()}
       </button>
