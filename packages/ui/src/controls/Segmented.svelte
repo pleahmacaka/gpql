@@ -77,7 +77,7 @@
         onpick?.(option.value)
       }}
       aria-pressed={value === option.value}
-      class="relative z-10 flex-1 rounded-selector py-1.5 text-sm
+      class="relative z-10 flex-1 rounded-selector py-2 text-sm
         transition-colors {value === option.value
         ? 'font-medium'
         : 'text-base-content/55 hover:text-base-content'}"

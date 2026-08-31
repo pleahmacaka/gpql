@@ -30,7 +30,7 @@
 <div
   class="h-full w-full rounded-box border border-primary/25 bg-primary/5"
 >
-  <header class="flex h-8 items-center gap-1.5 px-3">
+  <header class="flex h-8 items-center gap-2 px-3">
     {#if editing}
       <!-- svelte-ignore a11y_autofocus -->
       <input
@@ -66,7 +66,7 @@
         type="button"
         aria-label={name}
         onclick={begin}
-        class="nodrag rounded-selector p-0.5 text-primary/50 hover:text-primary"
+        class="nodrag rounded-selector p-1 text-primary/50 hover:text-primary"
       >
         <Icon icon="lucide:pencil" class="size-3" />
       </button>
@@ -75,7 +75,7 @@
         type="button"
         aria-label={name}
         onclick={() => board.ungroup?.(id)}
-        class="nodrag rounded-selector p-0.5 text-primary/50 hover:text-error"
+        class="nodrag rounded-selector p-1 text-primary/50 hover:text-error"
       >
         <Icon icon="lucide:ungroup" class="size-3" />
       </button>

@@ -291,6 +291,13 @@ input,
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-base-content) 7%, transparent);
 }
 
+/* lucide ships every icon as an outline with fill:none on the path, so a solid
+   state has to reach past the svg element itself */
+.solid,
+.solid * {
+  fill: currentColor;
+}
+
 .lift {
   box-shadow:
     0 0 0 1px color-mix(in oklch, var(--color-base-content) 9%, transparent),

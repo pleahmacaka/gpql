@@ -4,7 +4,7 @@
   import { createVirtualizer } from "@tanstack/svelte-virtual"
   import { untrack } from "svelte"
 
-  import { Dropdown, Icon, drag, menu } from "@gpql/ui"
+  import { Dropdown, Icon, drag, menu, rem } from "@gpql/ui"
   import { FORMATS, exportTable } from "$lib/session/exporting"
   import { workspace } from "$lib/session/workspace.svelte"
 
@@ -38,7 +38,7 @@
   const rows = createVirtualizer<HTMLDivElement, HTMLButtonElement>({
     count: 0,
     getScrollElement: () => scroller,
-    estimateSize: () => 30,
+    estimateSize: () => rem(2),
     overscan: 10,
   })
 
@@ -139,7 +139,7 @@
       event,
       moved =>
         (workspace.asideWidth = Math.min(
-          Math.max(startWidth + moved.clientX - startX, 192),
+          Math.max(startWidth + moved.clientX - startX, rem(12)),
           480,
         )),
       () => workspace.setAsideWidth(workspace.asideWidth),
@@ -237,41 +237,52 @@
         {@const table = shown[row.index]}
 
         {#if table}
-        <button
-          type="button"
-          onclick={() => workspace.select(table.name)}
+        {@const starred = workspace.favorites.includes(table.name)}
+
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
           oncontextmenu={event => openMenu(event, table.name)}
-          aria-pressed={workspace.browse.table === table.name}
-          class="absolute inset-x-0 flex items-center gap-2 rounded-field px-2
-            text-left contain-paint transition-colors {workspace.browse.table ===
+          class="group absolute inset-x-0 flex items-center gap-2 rounded-field
+            px-2 contain-paint transition-colors {workspace.browse.table ===
           table.name
             ? 'bg-primary/10 text-primary'
             : 'hover:bg-base-200'}"
           style:height="{row.size}px"
           style:transform="translateY({row.start}px)"
         >
-          <Icon icon="lucide:table-2" class="size-3.5 shrink-0 opacity-60" />
+          <button
+            type="button"
+            onclick={() => workspace.select(table.name)}
+            aria-pressed={workspace.browse.table === table.name}
+            class="flex min-w-0 flex-1 items-center gap-2 text-left"
+          >
+            <Icon icon="lucide:table-2" class="size-4 shrink-0 opacity-60" />
 
-          <span class="flex-1 truncate text-sm" title={table.name}>
-            {table.name}
-          </span>
+            <span class="truncate text-sm" title={table.name}>
+              {table.name}
+            </span>
+          </button>
 
-          {#if workspace.favorites.includes(table.name)}
-            <Icon
-              icon="lucide:star"
-              class="size-3 shrink-0 fill-current text-accent"
-            />
-          {/if}
-
-          <span class="text-xs text-base-content/40">{table.rows}</span>
-        </button>
+          <button
+            type="button"
+            aria-label={starred ? m.menu_unfavorite() : m.menu_favorite()}
+            aria-pressed={starred}
+            onclick={() => workspace.toggleFavorite(table.name)}
+            class="grid size-6 shrink-0 place-items-center rounded-selector
+              {starred
+              ? 'text-accent'
+              : 'text-base-content/30 opacity-0 group-hover:opacity-100 hover:text-accent focus-visible:opacity-100'}"
+          >
+            <Icon icon="lucide:star" class="size-4 {starred ? 'solid' : ''}" />
+          </button>
+        </div>
         {/if}
       {/each}
     </div>
   </div>
   {/if}
 
-  <p class="px-4 py-2.5 text-xs text-base-content/40">
+  <p class="px-4 py-3 text-xs text-base-content/40">
     {panel === "objects" ? m.objects_count({ count: workspace.objects.length }) : counter}
   </p>
 </aside>

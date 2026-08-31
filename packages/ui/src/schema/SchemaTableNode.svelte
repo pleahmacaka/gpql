@@ -22,14 +22,14 @@
     type="target"
     id="referenced"
     position={Position.Right}
-    class="!size-1.5 !border-0 !bg-base-content/25"
+    class="!size-2 !border-0 !bg-base-content/25"
     style="top: 1.35rem"
   />
 
   <header class="flex items-center gap-2 pb-2">
     <Icon
       icon="lucide:table-2"
-      class="size-3.5 {active ? 'text-primary' : 'text-base-content/40'}"
+      class="size-4 {active ? 'text-primary' : 'text-base-content/40'}"
     />
 
     <h3
@@ -50,10 +50,10 @@
           event.stopPropagation()
           board.onopen?.(table.name)
         }}
-        class="nodrag rounded-selector p-0.5 text-base-content/35
+        class="nodrag rounded-selector p-1 text-base-content/35
           hover:bg-base-100 hover:text-primary"
       >
-        <Icon icon="lucide:arrow-up-right" class="size-3.5" />
+        <Icon icon="lucide:arrow-up-right" class="size-4" />
       </button>
     {/if}
   </header>
@@ -65,7 +65,7 @@
       type="source"
       id="note"
       position={Position.Left}
-      class="!size-1.5 !border-0 !bg-base-content/30"
+      class="!size-2 !border-0 !bg-base-content/30"
       style="top: 2.6rem"
     />
   {/if}
@@ -88,7 +88,7 @@
         column.name.toLowerCase().includes(board.needle)}
 
       <div
-        class="relative flex h-5.5 items-center gap-1.5 rounded-selector
+        class="relative flex h-6 items-center gap-2 rounded-selector
           {board.at(table.name, index)
             ? 'bg-primary/15'
             : match
@@ -100,7 +100,7 @@
             type="source"
             id={column.name}
             position={Position.Left}
-            class="!size-1.5 !border-0 !bg-primary"
+            class="!size-2 !border-0 !bg-primary"
           />
         {/if}
 
@@ -124,13 +124,13 @@
         {/if}
 
         <dd
-          class="flex shrink-0 items-center gap-1.5 text-xs
+          class="flex shrink-0 items-center gap-2 text-xs
             text-base-content/40"
         >
           {#if column.references}
             <span
-              class="max-w-28 truncate rounded-selector bg-primary/10 px-1.5
-                py-0.5 text-primary"
+              class="max-w-28 truncate rounded-selector bg-primary/10 px-2
+                py-1 text-primary"
               title={column.references}
             >
               {column.references}

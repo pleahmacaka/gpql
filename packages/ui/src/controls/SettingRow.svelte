@@ -13,7 +13,7 @@
   let { icon, title, detail, children }: Props = $props()
 </script>
 
-<div class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-2.5">
+<div class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-3">
   <Icon {icon} class="size-4 text-base-content/40" />
 
   <div class="flex-1">

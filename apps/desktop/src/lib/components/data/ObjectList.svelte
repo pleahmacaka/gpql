@@ -102,7 +102,7 @@
     type="button"
     aria-expanded={!shut}
     onclick={() => (open = { ...open, [kind]: shut })}
-    class="flex w-full items-center gap-1.5 px-3 pt-2 pb-1 text-xs
+    class="flex w-full items-center gap-2 px-3 pt-2 pb-1 text-xs
       text-base-content/40 hover:text-base-content/70"
   >
     <Icon
@@ -132,7 +132,7 @@
         >
           <Icon
             icon={ICONS[entry.kind]}
-            class="size-3.5 shrink-0 opacity-60"
+            class="size-4 shrink-0 opacity-60"
           />
 
           <span class="min-w-0 flex-1 truncate text-sm" title={entry.name}>

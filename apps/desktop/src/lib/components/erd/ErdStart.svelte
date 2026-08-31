@@ -49,7 +49,7 @@
   <button
     type="button"
     onclick={create}
-    class="flex w-full items-center gap-3 rounded-field bg-primary/10 px-3 py-2.5
+    class="flex w-full items-center gap-3 rounded-field bg-primary/10 px-3 py-3
       text-left transition-colors hover:bg-primary/15"
   >
     <Icon icon="lucide:file-plus-2" class="size-4 text-accent" />
@@ -63,7 +63,7 @@
   <button
     type="button"
     onclick={pick}
-    class="flex w-full items-center gap-3 rounded-field bg-base-200 px-3 py-2.5
+    class="flex w-full items-center gap-3 rounded-field bg-base-200 px-3 py-3
       text-left transition-colors hover:bg-base-300"
   >
     <Icon icon="lucide:folder-open" class="size-4 text-base-content/40" />

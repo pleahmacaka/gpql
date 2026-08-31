@@ -70,14 +70,14 @@
         }
       }}
       onblur={() => (editing = null)}
-      class="w-full rounded-field bg-base-200 px-2.5 py-1.5 text-xs
+      class="w-full rounded-field bg-base-200 px-3 py-2 text-xs
         outline-none select-text ring-1 ring-primary/40"
     />
   {:else}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       oncontextmenu={event => openMenu(event, index)}
-      class="max-w-4/5 rounded-field px-2.5 py-1.5 text-xs
+      class="max-w-4/5 rounded-field px-3 py-2 text-xs
         whitespace-pre-wrap {turn.role === 'you'
         ? 'self-end bg-primary/10 text-primary'
         : 'self-start bg-base-200'}"
@@ -96,7 +96,7 @@
           aria-label="previous version"
           onclick={() => chat.pickThread(alts.pick - 1)}
           disabled={alts.pick === 0}
-          class="rounded-selector p-0.5 hover:text-base-content
+          class="rounded-selector p-1 hover:text-base-content
             disabled:opacity-30"
         >
           <Icon icon="lucide:chevron-left" class="size-3" />
@@ -109,7 +109,7 @@
           aria-label="next version"
           onclick={() => chat.pickThread(alts.pick + 1)}
           disabled={alts.pick === alts.threads.length - 1}
-          class="rounded-selector p-0.5 hover:text-base-content
+          class="rounded-selector p-1 hover:text-base-content
             disabled:opacity-30"
         >
           <Icon icon="lucide:chevron-right" class="size-3" />

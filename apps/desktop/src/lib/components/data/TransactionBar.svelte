@@ -12,10 +12,10 @@
 {#if writes.open}
   <div
     transition:fade={veil()}
-    class="flex items-center gap-2 rounded-field bg-warning/15 px-3 py-1.5
+    class="flex items-center gap-2 rounded-field bg-warning/15 px-3 py-2
       text-xs text-warning"
   >
-    <Icon icon="lucide:git-commit-horizontal" class="size-3.5 shrink-0" />
+    <Icon icon="lucide:git-commit-horizontal" class="size-4 shrink-0" />
 
     <span class="flex-1">{writes.error ?? m.tx_open()}</span>
 
@@ -23,7 +23,7 @@
       type="button"
       disabled={writes.busy}
       onclick={() => writes.end(false)}
-      class="rounded-selector px-2 py-0.5 hover:bg-warning/20
+      class="rounded-selector px-2 py-1 hover:bg-warning/20
         disabled:opacity-40"
     >
       {m.tx_rollback()}
@@ -33,7 +33,7 @@
       type="button"
       disabled={writes.busy}
       onclick={() => writes.end(true)}
-      class="rounded-selector bg-warning px-2 py-0.5 text-warning-content
+      class="rounded-selector bg-warning px-2 py-1 text-warning-content
         disabled:opacity-40"
     >
       {m.tx_commit()}

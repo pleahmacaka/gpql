@@ -104,7 +104,7 @@
             <button
               type="button"
               onclick={() => (doc.selected = entry.name)}
-              class="min-w-0 flex-1 truncate rounded-field px-2 py-1.5 text-left
+              class="min-w-0 flex-1 truncate rounded-field px-2 py-2 text-left
                 text-sm transition-colors {doc.selected === entry.name
                 ? 'bg-primary/10 text-primary'
                 : 'hover:bg-base-200'}"
@@ -123,7 +123,7 @@
               class="rounded-selector p-1 text-base-content/30 opacity-0
                 transition-opacity group-hover:opacity-100 hover:text-error"
             >
-              <Icon icon="lucide:trash-2" class="size-3.5" />
+              <Icon icon="lucide:trash-2" class="size-4" />
             </button>
           </div>
         {/each}
@@ -158,7 +158,7 @@
       <button
         type="button"
         onclick={() => workspace.closeErd()}
-        class="rounded-field px-2 py-0.5 text-xs text-base-content/45
+        class="rounded-field px-2 py-1 text-xs text-base-content/45
           hover:bg-base-200 hover:text-base-content"
       >
         {m.erd_close()}
@@ -200,12 +200,12 @@
         onchange={event =>
           doc.renameTable(table.name, event.currentTarget.value)}
         spellcheck="false"
-        class="w-full rounded-field bg-base-200 px-3 py-1.5 text-sm outline-none"
+        class="w-full rounded-field bg-base-200 px-3 py-2 text-sm outline-none"
       />
 
       {#each table.columns as column, index (index)}
-        <div class="space-y-1.5 rounded-field bg-base-200 p-2">
-          <div class="flex items-center gap-1.5">
+        <div class="space-y-2 rounded-field bg-base-200 p-2">
+          <div class="flex items-center gap-2">
             <input
               value={column.name}
               onchange={event =>
@@ -233,12 +233,12 @@
               onclick={() => doc.removeColumn(table.name, index)}
               class="rounded-selector p-1 text-base-content/30 hover:text-error"
             >
-              <Icon icon="lucide:trash-2" class="size-3.5" />
+              <Icon icon="lucide:trash-2" class="size-4" />
             </button>
           </div>
 
           <div class="flex items-center gap-3 text-xs">
-            <label class="flex cursor-pointer items-center gap-1.5">
+            <label class="flex cursor-pointer items-center gap-2">
               <input
                 type="checkbox"
                 checked={column.primaryKey}
@@ -251,7 +251,7 @@
               {m.erd_primary_key()}
             </label>
 
-            <label class="flex cursor-pointer items-center gap-1.5">
+            <label class="flex cursor-pointer items-center gap-2">
               <input
                 type="checkbox"
                 checked={column.required}
@@ -281,10 +281,10 @@
       <button
         type="button"
         onclick={() => doc.addColumn(table.name)}
-        class="flex items-center justify-center gap-1.5 rounded-field
+        class="flex items-center justify-center gap-2 rounded-field
           bg-base-200 py-2 text-sm transition-colors hover:bg-base-300"
       >
-        <Icon icon="lucide:plus" class="size-3.5" />
+        <Icon icon="lucide:plus" class="size-4" />
         {m.erd_add_column()}
       </button>
     </aside>

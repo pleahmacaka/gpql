@@ -55,14 +55,14 @@
       <button
         type="button"
         onclick={() => pick(item)}
-        class="flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left
+        class="flex w-full items-center gap-2 rounded-field px-2 py-2 text-left
           text-sm hover:bg-base-200
           {item.danger ? 'text-error' : ''}"
       >
         {#if item.icon}
-          <Icon icon={item.icon} class="size-3.5 shrink-0 opacity-60" />
+          <Icon icon={item.icon} class="size-4 shrink-0 opacity-60" />
         {:else}
-          <span class="size-3.5 shrink-0"></span>
+          <span class="size-4 shrink-0"></span>
         {/if}
 
         <span class="truncate">{item.label}</span>

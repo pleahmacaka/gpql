@@ -56,7 +56,7 @@
 <div
   class="flex items-center gap-1 rounded-field bg-base-200 px-2 py-1 hairline"
 >
-  <Icon icon="lucide:search" class="size-3.5 shrink-0 text-base-content/35" />
+  <Icon icon="lucide:search" class="size-4 shrink-0 text-base-content/35" />
 
   <input
     bind:this={box}
@@ -81,10 +81,10 @@
     aria-label="Previous match"
     onclick={onprev}
     disabled={total === 0}
-    class="rounded-selector p-0.5 text-base-content/45 hover:text-base-content
+    class="rounded-selector p-1 text-base-content/45 hover:text-base-content
       disabled:text-base-content/20"
   >
-    <Icon icon="lucide:chevron-down" class="size-3.5 rotate-180" />
+    <Icon icon="lucide:chevron-down" class="size-4 rotate-180" />
   </button>
 
   <button
@@ -92,18 +92,18 @@
     aria-label="Next match"
     onclick={onnext}
     disabled={total === 0}
-    class="rounded-selector p-0.5 text-base-content/45 hover:text-base-content
+    class="rounded-selector p-1 text-base-content/45 hover:text-base-content
       disabled:text-base-content/20"
   >
-    <Icon icon="lucide:chevron-down" class="size-3.5" />
+    <Icon icon="lucide:chevron-down" class="size-4" />
   </button>
 
   <button
     type="button"
     aria-label={m.close()}
     onclick={onclose}
-    class="rounded-selector p-0.5 text-base-content/40 hover:text-base-content"
+    class="rounded-selector p-1 text-base-content/40 hover:text-base-content"
   >
-    <Icon icon="lucide:x" class="size-3.5" />
+    <Icon icon="lucide:x" class="size-4" />
   </button>
 </div>

@@ -109,7 +109,7 @@
         />
       {/if}
 
-      <div class="flex gap-1 self-center rounded-selector bg-base-200 p-0.5">
+      <div class="flex gap-1 self-center rounded-selector bg-base-200 p-1">
         {#each [{ id: "table", icon: "lucide:table-2" }, { id: "chart", icon: "lucide:bar-chart-3" }] as option (option.id)}
           <button
             type="button"
@@ -121,7 +121,7 @@
               ? 'bg-base-100 text-base-content hairline'
               : 'text-base-content/45'}"
           >
-            <Icon icon={option.icon} class="size-3.5" />
+            <Icon icon={option.icon} class="size-4" />
           </button>
         {/each}
       </div>
@@ -131,14 +131,14 @@
         onclick={toggleWrites}
         aria-pressed={!workspace.readOnly}
         title={workspace.readOnly ? m.read_only() : m.writes_on()}
-        class="flex items-center gap-1.5 self-center rounded-selector px-2 py-1
+        class="flex items-center gap-2 self-center rounded-selector px-2 py-1
           text-xs transition-colors {workspace.readOnly
           ? 'bg-base-200 text-base-content/55 hover:bg-base-300'
           : 'bg-warning/15 text-warning'}"
       >
         <Icon
           icon={workspace.readOnly ? "lucide:lock" : "lucide:pencil"}
-          class="size-3.5"
+          class="size-4"
         />
         {workspace.readOnly ? m.read_only() : m.writes_on()}
       </button>
@@ -186,7 +186,7 @@
       floating p-5 lift"
   >
     <div class="flex items-start gap-3">
-      <Icon icon="lucide:pencil" class="mt-0.5 size-4 shrink-0 text-warning" />
+      <Icon icon="lucide:pencil" class="mt-1 size-4 shrink-0 text-warning" />
 
       <div>
         <h2 class="text-sm font-medium">{m.writes_ask()}</h2>
@@ -199,7 +199,7 @@
       <button
         type="button"
         onclick={() => (asking = false)}
-        class="flex-1 rounded-field bg-base-200 py-1.5 text-sm
+        class="flex-1 rounded-field bg-base-200 py-2 text-sm
           hover:bg-base-300"
       >
         {m.cancel()}
@@ -208,7 +208,7 @@
       <button
         type="button"
         onclick={allowWrites}
-        class="flex-1 rounded-field bg-warning py-1.5 text-sm
+        class="flex-1 rounded-field bg-warning py-2 text-sm
           text-warning-content"
       >
         {m.writes_allow()}

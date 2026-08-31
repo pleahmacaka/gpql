@@ -7,6 +7,7 @@
   import { menu, type MenuItem } from "../controls/menu.svelte"
   import { tooltip } from "../controls/tooltip"
   import { Icon } from "../icons"
+  import { rem } from "../controls/rem"
 
   export type CellEdit = {
     keys: Record<string, string | null>
@@ -63,7 +64,7 @@
     columns,
     rows,
     types = {},
-    rowHeight = 34,
+    rowHeight = rem(2),
     filterable = true,
     editable = false,
     keyColumns = [],
@@ -126,7 +127,7 @@
   ]
 
   const DEFAULT_WIDTH = 176
-  const MIN_WIDTH = 72
+  const MIN_WIDTH = rem(4.5)
 
   let viewport = $state<HTMLDivElement | null>(null)
   let widths = $state<Record<string, number>>({})
@@ -454,7 +455,7 @@
 
     const style = getComputedStyle(viewport)
 
-    context.font = `14px ${style.fontFamily}`
+    context.font = `${style.fontSize} ${style.fontFamily}`
 
     const index = columns.indexOf(name)
     let widest = context.measureText(name).width + 24
@@ -466,7 +467,7 @@
 
     widths = {
       ...widths,
-      [name]: Math.min(Math.max(Math.ceil(widest) + 36, MIN_WIDTH), 480),
+      [name]: Math.min(Math.max(Math.ceil(widest) + rem(2), MIN_WIDTH), rem(30)),
     }
   }
 
@@ -902,7 +903,7 @@
           <button
             type="button"
             onclick={() => toggleFilter(name)}
-            class="flex items-center gap-1 py-0.5"
+            class="flex items-center gap-1 py-1"
           >
             <span class="font-medium">{name}</span>
             <span class="opacity-70">{labelOf(filter.op)}</span>
@@ -916,7 +917,7 @@
             type="button"
             aria-label="drop {name}"
             onclick={() => dropFilter(name)}
-            class="rounded-selector p-0.5 opacity-60 hover:opacity-100"
+            class="rounded-selector p-1 opacity-60 hover:opacity-100"
           >
             <Icon icon="lucide:x" class="size-3" />
           </button>
@@ -929,7 +930,7 @@
           filters = {}
           openFilter = null
         }}
-        class="rounded-selector px-2 py-0.5 text-xs text-base-content/45
+        class="rounded-selector px-2 py-1 text-xs text-base-content/45
           hover:text-error"
       >
         {words.clearFilters}
@@ -995,7 +996,7 @@
             type="button"
             aria-label="Sort {name}"
             onclick={() => toggleSort(name)}
-            class="shrink-0 rounded-selector p-0.5
+            class="shrink-0 rounded-selector p-1
               {sort?.column === name
                 ? 'text-primary'
                 : 'text-base-content/25 hover:text-base-content/60'}"
@@ -1036,7 +1037,7 @@
           style:top="2.25rem"
         >
           <div class="flex items-center gap-2 pb-2">
-            <Icon icon="lucide:filter" class="size-3.5 text-base-content/40" />
+            <Icon icon="lucide:filter" class="size-4 text-base-content/40" />
 
             <span class="min-w-0 flex-1 truncate text-sm font-medium">
               {openFilter}
@@ -1046,10 +1047,10 @@
               type="button"
               aria-label="close"
               onclick={closeFilter}
-              class="rounded-selector p-0.5 text-base-content/35
+              class="rounded-selector p-1 text-base-content/35
                 hover:text-base-content"
             >
-              <Icon icon="lucide:x" class="size-3.5" />
+              <Icon icon="lucide:x" class="size-4" />
             </button>
           </div>
 
@@ -1089,7 +1090,7 @@
                   }
                 }}
                 placeholder={words.value}
-                class="min-w-0 flex-1 bg-transparent px-2 py-1.5 text-sm
+                class="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm
                   outline-none select-text placeholder:text-base-content/30"
               />
             {/if}
@@ -1098,7 +1099,7 @@
           <div class="flex items-center gap-1 pt-2">
             <Icon
               icon="lucide:arrow-up-down"
-              class="size-3.5 text-base-content/40"
+              class="size-4 text-base-content/40"
             />
 
             {#each DIRECTIONS as dir (dir)}
@@ -1111,7 +1112,7 @@
                 onclick={() => {
                   sort = chosen ? null : { column: target, dir }
                 }}
-                class="flex items-center gap-1 rounded-selector px-2 py-0.5
+                class="flex items-center gap-1 rounded-selector px-2 py-1
                   text-xs {chosen
                   ? 'bg-primary text-primary-content'
                   : 'bg-base-200 hover:bg-base-300'}"
@@ -1286,7 +1287,7 @@
         items-center gap-2 rounded-field floating px-2 py-1 text-xs
         text-base-content/60 lift"
     >
-      <Icon icon="lucide:loader-circle" class="size-3.5 animate-spin" />
+      <Icon icon="lucide:loader-circle" class="size-4 animate-spin" />
       {words.loading}
     </div>
   {/if}
@@ -1320,7 +1321,7 @@
       class="flex items-center gap-3 border-t border-base-content/8 px-4 py-2
         text-sm"
     >
-      <Icon icon="lucide:pencil" class="size-3.5 text-primary" />
+      <Icon icon="lucide:pencil" class="size-4 text-primary" />
 
       <span class="flex-1 text-xs text-base-content/60">
         {dirty}

@@ -111,7 +111,7 @@
 
     <div
       bind:this={log}
-      class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3 py-2"
+      class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-2"
     >
       {#if chat.turns.length === 0}
         <p class="px-1 py-6 text-center text-sm text-base-content/45">
@@ -123,7 +123,7 @@
 
       {#if chat.busy}
         <p class="flex items-center gap-2 px-1 text-xs text-base-content/45">
-          <Icon icon="lucide:loader-circle" class="size-3.5 animate-spin" />
+          <Icon icon="lucide:loader-circle" class="size-4 animate-spin" />
           {m.chat_thinking()}
         </p>
       {/if}
@@ -148,7 +148,7 @@
         type="button"
         onclick={send}
         disabled={chat.busy || draft.trim() === ""}
-        class="mt-1 w-full rounded-field bg-primary py-1.5 text-xs
+        class="mt-1 w-full rounded-field bg-primary py-2 text-xs
           text-primary-content disabled:bg-base-200
           disabled:text-base-content/30"
       >
@@ -186,14 +186,14 @@
             rounded-full floating text-base-content/45 lift
             hover:text-base-content"
         >
-          <Icon icon="lucide:x" class="size-3.5" />
+          <Icon icon="lucide:x" class="size-4" />
         </button>
 
         <div
           bind:this={log}
           style:max-height="{orbSize.height}px"
-          class="flex w-full flex-col gap-1.5 overflow-y-auto rounded-box
-            floating p-2.5 lift"
+          class="flex w-full flex-col gap-2 overflow-y-auto rounded-box
+            floating p-3 lift"
         >
           <ChatMessages />
         </div>
@@ -220,7 +220,7 @@
 
       <div
         class="flex min-w-0 flex-1 items-center gap-2 rounded-full floating
-          py-1.5 pr-1.5 pl-3.5 lift"
+          py-2 pr-2 pl-4 lift"
       >
         <input
           bind:this={box}
@@ -250,7 +250,7 @@
           type="button"
           aria-label={m.orb_pin()}
           onclick={() => (chat.dock = "panel")}
-          class="rounded-full p-1.5 text-base-content/40 hover:bg-base-200
+          class="rounded-full p-2 text-base-content/40 hover:bg-base-200
             hover:text-base-content"
         >
           <Icon icon="lucide:panel-right" class="size-4" />

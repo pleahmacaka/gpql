@@ -32,7 +32,7 @@
         </h2>
 
         {#if writes.manual}
-          <span class="rounded-field bg-warning/15 px-2 py-0.5 text-xs text-warning">
+          <span class="rounded-field bg-warning/15 px-2 py-1 text-xs text-warning">
             {m.tx_manual()}
           </span>
         {/if}
@@ -52,7 +52,7 @@
         <button
           type="button"
           onclick={() => writes.settle(false)}
-          class="rounded-field bg-base-200 px-3 py-1.5 text-xs hover:bg-base-300"
+          class="rounded-field bg-base-200 px-3 py-2 text-xs hover:bg-base-300"
         >
           {m.discard()}
         </button>
@@ -60,7 +60,7 @@
         <button
           type="button"
           onclick={() => writes.settle(true)}
-          class="rounded-field bg-primary px-3 py-1.5 text-xs text-primary-content"
+          class="rounded-field bg-primary px-3 py-2 text-xs text-primary-content"
         >
           {m.preview_run()}
         </button>

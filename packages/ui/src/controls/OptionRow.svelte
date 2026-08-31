@@ -16,7 +16,7 @@
   type="button"
   {onclick}
   aria-pressed={on}
-  class="flex w-full items-center gap-3 rounded-field px-3 py-2.5 text-left
+  class="flex w-full items-center gap-3 rounded-field px-3 py-3 text-left
     transition-colors {on
     ? 'bg-primary/10 hover:bg-primary/15'
     : 'bg-base-200 hover:bg-base-300'}"
