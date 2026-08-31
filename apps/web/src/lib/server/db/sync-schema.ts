@@ -46,5 +46,6 @@ export const erdRoom = gpql.table("erd_room", {
   userId: owner(),
   name: text("name").notNull(),
   tables: text("tables").notNull(),
+  open: integer("open").notNull().default(0),
   createdAt: integer("created_at").notNull(),
 })

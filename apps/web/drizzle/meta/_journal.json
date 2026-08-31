@@ -15,6 +15,20 @@
       "when": 1787561216766,
       "tag": "0001_mysterious_bloodstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788138532030,
+      "tag": "0002_open_erd_room",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788158309263,
+      "tag": "0003_gpql_area",
+      "breakpoints": true
     }
   ]
 }
