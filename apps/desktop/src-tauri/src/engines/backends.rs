@@ -29,6 +29,9 @@ pub struct Backend {
     pub icon: &'static str,
     pub port: &'static str,
     pub fields: &'static [Field],
+    // GPQL connects and runs queries, but reads no column list and cannot page
+    // or rank server side, so the schema graph and the grid stay thin
+    pub wip: bool,
     #[serde(skip)]
     pub transport: Transport,
 }
@@ -116,6 +119,13 @@ const FLUX: &[Field] = &[
     field("url", "URL", "http://127.0.0.1:8086"),
     field("user", "Organization", ""),
     secret("token", "API token"),
+    field("database", "Bucket", ""),
+];
+
+const INFLUX3: &[Field] = &[
+    field("url", "URL", "http://127.0.0.1:8181"),
+    secret("token", "Token"),
+    field("database", "Database", ""),
 ];
 
 const CLICKHOUSE: &[Field] = &[
@@ -125,6 +135,8 @@ const CLICKHOUSE: &[Field] = &[
     field("database", "Database", "default"),
 ];
 
+// ordered by how many developers reach for them, so the picker opens on
+// what most people came for
 pub const CATALOG: &[Backend] = &[
     Backend {
         id: "postgres",
@@ -133,6 +145,7 @@ pub const CATALOG: &[Backend] = &[
         icon: "simple-icons:postgresql",
         port: "5432",
         fields: SERVER,
+        wip: false,
         transport: Transport::Postgres,
     },
     Backend {
@@ -142,6 +155,7 @@ pub const CATALOG: &[Backend] = &[
         icon: "simple-icons:mysql",
         port: "3306",
         fields: SERVER,
+        wip: false,
         transport: Transport::MySql,
     },
     Backend {
@@ -151,16 +165,8 @@ pub const CATALOG: &[Backend] = &[
         icon: "simple-icons:sqlite",
         port: "",
         fields: FILE,
+        wip: false,
         transport: Transport::Sqlite,
-    },
-    Backend {
-        id: "duckdb",
-        label: "DuckDB",
-        dialect: "sql",
-        icon: "simple-icons:duckdb",
-        port: "",
-        fields: FILE,
-        transport: Transport::DuckDb,
     },
     Backend {
         id: "supabase",
@@ -169,6 +175,7 @@ pub const CATALOG: &[Backend] = &[
         icon: "simple-icons:supabase",
         port: "5432",
         fields: SUPABASE,
+        wip: false,
         transport: Transport::Postgres,
     },
     Backend {
@@ -178,61 +185,8 @@ pub const CATALOG: &[Backend] = &[
         icon: "simple-icons:supabase",
         port: "",
         fields: SUPABASE_API,
+        wip: false,
         transport: Transport::Http,
-    },
-    Backend {
-        id: "greptimedb",
-        label: "GreptimeDB",
-        dialect: "sql",
-        icon: "simple-icons:greptimedb",
-        port: "4003",
-        fields: SERVER,
-        transport: Transport::Postgres,
-    },
-    Backend {
-        id: "turso",
-        label: "Turso",
-        dialect: "sql",
-        icon: "simple-icons:turso",
-        port: "",
-        fields: URL_TOKEN,
-        transport: Transport::Driver,
-    },
-    Backend {
-        id: "influxdb",
-        label: "InfluxDB 3",
-        dialect: "sql",
-        icon: "simple-icons:influxdb",
-        port: "",
-        fields: URL_TOKEN,
-        transport: Transport::Driver,
-    },
-    Backend {
-        id: "d1",
-        label: "Cloudflare D1",
-        dialect: "sql",
-        icon: "simple-icons:cloudflare",
-        port: "",
-        fields: D1,
-        transport: Transport::Http,
-    },
-    Backend {
-        id: "influxdb2",
-        label: "InfluxDB 2",
-        dialect: "flux",
-        icon: "simple-icons:influxdb",
-        port: "",
-        fields: FLUX,
-        transport: Transport::Driver,
-    },
-    Backend {
-        id: "clickhouse",
-        label: "ClickHouse",
-        dialect: "sql",
-        icon: "simple-icons:clickhouse",
-        port: "8123",
-        fields: CLICKHOUSE,
-        transport: Transport::Driver,
     },
     Backend {
         id: "snowflake",
@@ -241,6 +195,27 @@ pub const CATALOG: &[Backend] = &[
         icon: "simple-icons:snowflake",
         port: "",
         fields: SNOWFLAKE,
+        wip: true,
+        transport: Transport::Driver,
+    },
+    Backend {
+        id: "duckdb",
+        label: "DuckDB",
+        dialect: "sql",
+        icon: "simple-icons:duckdb",
+        port: "",
+        fields: FILE,
+        wip: false,
+        transport: Transport::DuckDb,
+    },
+    Backend {
+        id: "clickhouse",
+        label: "ClickHouse",
+        dialect: "sql",
+        icon: "simple-icons:clickhouse",
+        port: "8123",
+        fields: CLICKHOUSE,
+        wip: true,
         transport: Transport::Driver,
     },
     Backend {
@@ -250,7 +225,58 @@ pub const CATALOG: &[Backend] = &[
         icon: "simple-icons:neo4j",
         port: "7687",
         fields: NEO4J,
+        wip: true,
         transport: Transport::Driver,
+    },
+    Backend {
+        id: "influxdb",
+        label: "InfluxDB 3",
+        dialect: "sql",
+        icon: "simple-icons:influxdb",
+        port: "8181",
+        fields: INFLUX3,
+        wip: false,
+        transport: Transport::Driver,
+    },
+    Backend {
+        id: "influxdb2",
+        label: "InfluxDB 2",
+        dialect: "flux",
+        icon: "simple-icons:influxdb",
+        port: "8086",
+        fields: FLUX,
+        wip: false,
+        transport: Transport::Driver,
+    },
+    Backend {
+        id: "turso",
+        label: "Turso",
+        dialect: "sql",
+        icon: "simple-icons:turso",
+        port: "",
+        fields: URL_TOKEN,
+        wip: true,
+        transport: Transport::Driver,
+    },
+    Backend {
+        id: "d1",
+        label: "Cloudflare D1",
+        dialect: "sql",
+        icon: "simple-icons:cloudflare",
+        port: "",
+        fields: D1,
+        wip: true,
+        transport: Transport::Http,
+    },
+    Backend {
+        id: "greptimedb",
+        label: "GreptimeDB",
+        dialect: "sql",
+        icon: "simple-icons:greptimedb",
+        port: "4003",
+        fields: SERVER,
+        wip: false,
+        transport: Transport::Postgres,
     },
     Backend {
         id: "falkordb",
@@ -259,6 +285,7 @@ pub const CATALOG: &[Backend] = &[
         icon: "simple-icons:redis",
         port: "6379",
         fields: REDIS_URL,
+        wip: true,
         transport: Transport::Redis,
     },
 ];

@@ -44,6 +44,21 @@ pub struct Slice {
     pub sort: Option<Sort>,
     #[serde(default)]
     pub filters: Vec<Filter>,
+    #[serde(default)]
+    pub columns: Vec<String>,
+}
+
+// the influx builder offers a time range and a rollup that no sql engine has,
+// so they ride beside the slice instead of inside it
+#[derive(Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Shape {
+    #[serde(default)]
+    pub range: String,
+    #[serde(default)]
+    pub every: String,
+    #[serde(default)]
+    pub func: String,
 }
 
 // the caller sees only the rows it asked for, so any sort or filter it cannot
@@ -54,7 +69,7 @@ pub fn sliceable(session: &Session) -> bool {
     }
 
     if let Engine::Driver(driver) = &session.engine {
-        return driver.rows_query("t", 1).is_none();
+        return driver.sliceable();
     }
 
     return true;
@@ -115,19 +130,48 @@ pub async fn table_rows(
     table: &str,
     slice: &Slice,
 ) -> Result<QueryResult, String> {
+    return query(session, &rows_query(session, table, slice)).await;
+}
+
+// the builder shows the user the very query the grid would run, so both go
+// through here rather than each writing its own
+pub fn rows_query(session: &Session, table: &str, slice: &Slice) -> String {
+    return shaped_query(session, table, slice, &Shape::default());
+}
+
+pub fn shaped_query(
+    session: &Session,
+    table: &str,
+    slice: &Slice,
+    shape: &Shape,
+) -> String {
     let limit = slice.limit;
 
     if let Engine::Driver(driver) = &session.engine {
-        if let Some(script) = driver.rows_query(table, limit) {
-            return query(session, &script).await;
+        if let Some(script) = driver.rows_query(table, slice, shape) {
+            return script;
         }
     }
 
     if let Engine::Graph(_) = &session.engine {
-        return query(session, &format!("match (n:{table}) return n limit {limit}")).await;
+        return format!(
+            "match (n:{table}) return n skip {} limit {limit}",
+            slice.offset
+        );
     }
 
-    let mut sql = format!("select * from {}", quote_for(session, table));
+    let chosen = if slice.columns.is_empty() {
+        "*".to_string()
+    } else {
+        slice
+            .columns
+            .iter()
+            .map(|column| quote_for(session, column))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let mut sql = format!("select {chosen} from {}", quote_for(session, table));
 
     if !slice.filters.is_empty() {
         let conditions = slice
@@ -150,5 +194,5 @@ pub async fn table_rows(
 
     sql.push_str(&format!(" limit {limit} offset {}", slice.offset));
 
-    return query(session, &sql).await;
+    return sql;
 }

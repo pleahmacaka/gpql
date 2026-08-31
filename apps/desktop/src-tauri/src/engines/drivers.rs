@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::engines::db::{QueryResult, SessionConfig, TableInfo};
+use crate::engines::slicing::{Filter, Op, Shape, Slice};
 
 pub enum Driver {
     Turso(libsql::Connection),
@@ -13,6 +14,7 @@ pub enum Driver {
 
 pub struct Influx {
     client: influxdb2::Client,
+    bucket: String,
 }
 
 impl Driver {
@@ -58,14 +60,17 @@ impl Driver {
                 .map_err(|error| error.to_string())?,
             ))),
             "influxdb2" => {
+                // every call carries the org, so falling back to an empty one
+                // would fail later as a puzzling rejection of the token
                 let org = if config.user.is_empty() {
-                    sole_org(&config.url, &config.token).await.unwrap_or_default()
+                    sole_org(&config.url, &config.token).await?
                 } else {
                     config.user.clone()
                 };
 
                 Ok(Driver::Influx(Influx {
                     client: influxdb2::Client::new(&config.url, org, &config.token),
+                    bucket: config.database.clone(),
                 }))
             }
             "influxdb" => {
@@ -106,7 +111,7 @@ impl Driver {
             Driver::Click(_) => "show tables",
             Driver::Neo(_) => "call db.labels()",
             Driver::Snow(_) => "show tables",
-            Driver::Influx(influx) => return influx.buckets().await,
+            Driver::Influx(influx) => return influx.tables().await,
             Driver::Influx3(_) => {
                 "select table_name from information_schema.tables \
                  where table_schema = 'iox' order by table_name"
@@ -123,18 +128,55 @@ impl Driver {
             .collect());
     }
 
-    pub fn rows_query(&self, table: &str, limit: u32) -> Option<String> {
+    pub fn rows_query(
+        &self,
+        table: &str,
+        slice: &Slice,
+        shape: &Shape,
+    ) -> Option<String> {
         match self {
-            Driver::Neo(_) => Some(format!("match (n:{table}) return n limit {limit}")),
-            Driver::Influx(_) => Some(format!(
-                r#"from(bucket: "{table}")
-  |> range(start: 0)
-  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
-  |> sort(columns: ["_time"], desc: true)
-  |> limit(n: {limit})"#
+            Driver::Neo(_) => Some(format!(
+                "match (n:{table}) return n skip {} limit {}",
+                slice.offset, slice.limit
             )),
+            Driver::Influx(influx) => Some(influx.rows(table, slice, shape)),
             _ => None,
         }
+    }
+
+    // the grid ranks and pages a whole table, so a driver only says yes once it
+    // pushes the sort, the filters and the offset down to the server
+    pub fn sliceable(&self) -> bool {
+        return !matches!(self, Driver::Neo(_));
+    }
+
+    pub async fn columns(&self) -> Result<Option<QueryResult>, String> {
+        return match self {
+            Driver::Influx3(_) => self
+                .query(
+                    "select table_name, column_name, data_type, is_nullable,
+                            '', '', ''
+                     from information_schema.columns
+                     where table_schema = 'iox'
+                     order by table_name, ordinal_position",
+                )
+                .await
+                .map(Some),
+            Driver::Influx(influx) => influx.columns().await,
+            _ => Ok(None),
+        };
+    }
+
+    pub async fn databases(&self) -> Result<Vec<String>, String> {
+        return match self {
+            Driver::Influx(influx) => Ok(influx
+                .buckets()
+                .await?
+                .into_iter()
+                .map(|bucket| bucket.name)
+                .collect()),
+            _ => Ok(Vec::new()),
+        };
     }
 }
 
@@ -416,6 +458,253 @@ impl Influx {
             .map(|bucket| TableInfo { name: bucket.name, rows: 0 })
             .collect());
     }
+
+    // a bucket holds the same place a database does elsewhere, so the tables
+    // are its measurements once one is picked and the buckets themselves until
+    // then
+    async fn tables(&self) -> Result<Vec<TableInfo>, String> {
+        if self.bucket.is_empty() {
+            return self.buckets().await;
+        }
+
+        return Ok(self
+            .measurements()
+            .await?
+            .into_iter()
+            .map(|name| TableInfo { name, rows: 0 })
+            .collect());
+    }
+
+    async fn measurements(&self) -> Result<Vec<String>, String> {
+        return self
+            .client
+            .list_measurements(&self.bucket, Some(SINCE), None)
+            .await
+            .map_err(refused);
+    }
+
+    async fn columns(&self) -> Result<Option<QueryResult>, String> {
+        if self.bucket.is_empty() {
+            return Ok(None);
+        }
+
+        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+
+        for measurement in self.measurements().await? {
+            let tags = self
+                .client
+                .list_measurement_tag_keys(
+                    &self.bucket,
+                    &measurement,
+                    Some(SINCE),
+                    None,
+                )
+                .await
+                .map_err(refused)?;
+
+            let fields = self
+                .client
+                .list_measurement_field_keys(
+                    &self.bucket,
+                    &measurement,
+                    Some(SINCE),
+                    None,
+                )
+                .await
+                .map_err(refused)?;
+
+            rows.extend(shape(&measurement, &tags, &fields));
+        }
+
+        return Ok(Some(QueryResult {
+            columns: Vec::new(),
+            rows,
+            affected: None,
+        }));
+    }
+
+    fn rows(&self, table: &str, slice: &Slice, shape: &Shape) -> String {
+        let (bucket, measurement) = if self.bucket.is_empty() {
+            (table, None)
+        } else {
+            (self.bucket.as_str(), Some(table))
+        };
+
+        return flux_rows(bucket, measurement, slice, shape);
+    }
+}
+
+// the client defaults every schema call to the last 30 days, which silently
+// hides older measurements and keys
+const SINCE: &str = "0";
+
+// influx lets one name be a tag on some points and a field on others, and the
+// grid pivots them onto a single column, so the name may only be listed once
+fn shape(
+    measurement: &str,
+    tags: &[String],
+    fields: &[String],
+) -> Vec<Vec<Option<String>>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = vec![described(measurement, "_time", "time", true)];
+
+    seen.insert("_time".to_string());
+
+    for tag in tags.iter().filter(|tag| !tag.starts_with('_')) {
+        if seen.insert(tag.clone()) {
+            rows.push(described(measurement, tag, "tag", false));
+        }
+    }
+
+    for field in fields {
+        if seen.insert(field.clone()) {
+            rows.push(described(measurement, field, "field", false));
+        }
+    }
+
+    return rows;
+}
+
+fn described(
+    table: &str,
+    column: &str,
+    sort: &str,
+    required: bool,
+) -> Vec<Option<String>> {
+    return vec![
+        Some(table.to_string()),
+        Some(column.to_string()),
+        Some(sort.to_string()),
+        Some(if required { "NO" } else { "YES" }.to_string()),
+        Some(String::new()),
+        Some(String::new()),
+        Some(String::new()),
+    ];
+}
+
+fn flux_text(value: &str) -> String {
+    return format!(
+        "\"{}\"",
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+}
+
+fn flux_value(value: &str) -> String {
+    if value.parse::<f64>().is_ok() {
+        return value.to_string();
+    }
+
+    return flux_text(value);
+}
+
+fn flux_filter(filter: &Filter) -> String {
+    let column = format!("r[{}]", flux_text(&filter.column));
+    let value = flux_value(&filter.value);
+    let text = flux_text(&filter.value);
+
+    return match filter.op {
+        Op::IsNull => format!("not exists {column}"),
+        Op::NotNull => format!("exists {column}"),
+        Op::Eq => format!("{column} == {value}"),
+        Op::Ne => format!("{column} != {value}"),
+        Op::Gt => format!("{column} > {value}"),
+        Op::Gte => format!("{column} >= {value}"),
+        Op::Lt => format!("{column} < {value}"),
+        Op::Lte => format!("{column} <= {value}"),
+        Op::Contains => format!("strings.containsStr(v: {column}, substr: {text})"),
+        Op::Starts => format!("strings.hasPrefix(v: {column}, prefix: {text})"),
+        Op::Ends => format!("strings.hasSuffix(v: {column}, suffix: {text})"),
+    };
+}
+
+fn flux_rows(
+    bucket: &str,
+    measurement: Option<&str>,
+    slice: &Slice,
+    shape: &Shape,
+) -> String {
+    let searching = slice
+        .filters
+        .iter()
+        .any(|filter| matches!(filter.op, Op::Contains | Op::Starts | Op::Ends));
+
+    let mut script = String::new();
+
+    if searching {
+        script.push_str("import \"strings\"\n\n");
+    }
+
+    let since = if shape.range.trim().is_empty() {
+        SINCE
+    } else {
+        shape.range.trim()
+    };
+
+    script.push_str(&format!(
+        "from(bucket: {})\n  |> range(start: {since})\n",
+        flux_text(bucket)
+    ));
+
+    if let Some(name) = measurement {
+        script.push_str(&format!(
+            "  |> filter(fn: (r) => r._measurement == {})\n",
+            flux_text(name)
+        ));
+    }
+
+    // influx rolls up on the long form, while the fields are still rows
+    if !shape.every.trim().is_empty() && !shape.func.trim().is_empty() {
+        script.push_str(&format!(
+            "  |> aggregateWindow(every: {}, fn: {}, createEmpty: false)\n",
+            shape.every.trim(),
+            shape.func.trim()
+        ));
+    }
+
+    script.push_str(
+        "  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n",
+    );
+
+    // flux keeps one table per tag set, and sort, limit and offset each apply
+    // inside a table, so without this the grid ranks and pages every series
+    // on its own
+    script.push_str("  |> group()\n");
+
+    for filter in &slice.filters {
+        script.push_str(&format!(
+            "  |> filter(fn: (r) => {})\n",
+            flux_filter(filter)
+        ));
+    }
+
+    let (column, descending) = match &slice.sort {
+        Some(sort) => (sort.column.as_str(), sort.descending),
+        None => ("_time", true),
+    };
+
+    script.push_str(&format!(
+        "  |> sort(columns: [{}], desc: {descending})\n",
+        flux_text(column)
+    ));
+
+    script.push_str(&format!(
+        "  |> limit(n: {}, offset: {})",
+        slice.limit, slice.offset
+    ));
+
+    // keep comes last so a sort on a column the user left out still works
+    if !slice.columns.is_empty() {
+        let kept = slice
+            .columns
+            .iter()
+            .map(|column| flux_text(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        script.push_str(&format!("\n  |> keep(columns: [{kept}])"));
+    }
+
+    return script;
 }
 
 async fn sole_org(url: &str, token: &str) -> Result<String, String> {
@@ -438,12 +727,28 @@ async fn sole_org(url: &str, token: &str) -> Result<String, String> {
 fn refused(error: influxdb2::RequestError) -> String {
     let text = error.to_string();
 
-    if text.contains("401") || text.contains("unauthorized") {
-        return "influx turned that token down. InfluxDB 2 authorises the API                 with an API token, not the user and password you type into the                 web UI."
-            .to_string();
+    // influx only ever says "unauthorized access" here, so name the two things
+    // worth checking, and keep its own words after them
+    if text.contains("401 Unauthorized") {
+        return format!(
+            "influx refused that API token, or it cannot read this bucket: {}",
+            said(&text).unwrap_or_else(|| text.clone())
+        );
     }
 
-    return text;
+    return said(&text)
+        .map(|message| format!("{message} ({text})"))
+        .unwrap_or(text);
+}
+
+// influx wraps the real complaint in a json body; anything around it is noise
+// beside a form field
+fn said(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    let body: Value = serde_json::from_str(text.get(start..=end)?).ok()?;
+
+    return body.get("message")?.as_str().map(str::to_string);
 }
 
 fn noise(column: &str) -> bool {
@@ -501,3 +806,198 @@ fn cell(value: &Value) -> Option<String> {
 }
 
 
+
+#[cfg(test)]
+mod flux {
+    use super::*;
+    use crate::engines::slicing::Sort;
+
+    #[test]
+    fn pages_a_measurement() {
+        let slice = Slice {
+            limit: 50,
+            offset: 100,
+            sort: Some(Sort { column: "load".into(), descending: false }),
+            filters: vec![Filter {
+                column: "host".into(),
+                op: Op::Contains,
+                value: "edge".into(),
+            }],
+            columns: vec!["_time".into(), "usage".into()],
+        };
+
+        let script = flux_rows("metrics", Some("cpu"), &slice, &Shape::default());
+
+        assert!(script.starts_with("import \"strings\""));
+        assert!(script.contains(r#"from(bucket: "metrics")"#));
+        assert!(script.contains(r#"r._measurement == "cpu""#));
+        assert!(script.contains("|> group()"));
+        assert!(script.contains(r#"strings.containsStr(v: r["host"], substr: "edge")"#));
+        assert!(script.contains(r#"sort(columns: ["load"], desc: false)"#));
+        assert!(script.contains("limit(n: 50, offset: 100)"));
+        assert!(script.ends_with(r#"keep(columns: ["_time", "usage"])"#));
+    }
+
+    #[test]
+    fn browses_a_whole_bucket() {
+        let asked = Slice { limit: 10, ..Default::default() };
+        let script = flux_rows("metrics", None, &asked, &Shape::default());
+
+        assert!(!script.contains("_measurement =="));
+        assert!(!script.contains("import"));
+        assert!(script.contains(r#"sort(columns: ["_time"], desc: true)"#));
+    }
+
+    #[test]
+    fn a_name_that_is_both_a_tag_and_a_field_is_listed_once() {
+        let tags = vec!["_measurement".to_string(), "control_target_id".to_string()];
+        let fields = vec!["control_target_id".to_string(), "temp".to_string()];
+
+        let named: Vec<String> = shape("sensor", &tags, &fields)
+            .into_iter()
+            .map(|row| row[1].clone().unwrap_or_default())
+            .collect();
+
+        assert_eq!(named, ["_time", "control_target_id", "temp"]);
+    }
+
+    #[test]
+    fn an_influx_complaint_is_read_out_of_its_json() {
+        let bad_org = "HTTP request returned an error: 400 Bad Request,              `{\"code\":\"invalid\",\"message\":\"failed to decode request body:              organization name \\\"nosuchorg\\\" not found\"}`";
+
+        assert!(said(bad_org).unwrap().contains("not found"));
+        assert!(said("no json here").is_none());
+    }
+
+    #[test]
+    fn quotes_only_what_is_not_a_number() {
+        assert_eq!(flux_value("12.5"), "12.5");
+        assert_eq!(flux_value("edge-1"), "\"edge-1\"");
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+    use crate::engines::db::{open, Engine};
+    use crate::engines::slicing::Sort;
+
+    // GPQL_TEST_INFLUX2=url|org|token|bucket
+    async fn open_test() -> Option<crate::engines::db::Session> {
+        let target = std::env::var("GPQL_TEST_INFLUX2").ok()?;
+        let mut parts = target.splitn(4, '|');
+
+        let config = SessionConfig {
+            kind: "influxdb2".into(),
+            url: parts.next()?.into(),
+            user: parts.next()?.into(),
+            token: parts.next()?.into(),
+            database: parts.next()?.into(),
+            read_only: true,
+            ..Default::default()
+        };
+
+        return Some(open(&config).await.expect("could not open the test bucket"));
+    }
+
+    fn driver(session: &crate::engines::db::Session) -> &Driver {
+        match &session.engine {
+            Engine::Driver(driver) => driver,
+            _ => panic!("influx did not open as a driver"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bucket_lists_its_measurements_as_tables() {
+        let Some(session) = open_test().await else {
+            return;
+        };
+
+        let names: Vec<String> = driver(&session)
+            .tables()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|table| table.name)
+            .collect();
+
+        assert!(names.contains(&"sensor".to_string()), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn tags_and_fields_come_back_as_columns() {
+        let Some(session) = open_test().await else {
+            return;
+        };
+
+        let listing = driver(&session).columns().await.unwrap().unwrap();
+        let of_sensor: Vec<(String, String)> = listing
+            .rows
+            .iter()
+            .filter(|row| row[0].as_deref() == Some("sensor"))
+            .map(|row| {
+                (
+                    row[1].clone().unwrap_or_default(),
+                    row[2].clone().unwrap_or_default(),
+                )
+            })
+            .collect();
+
+        assert!(of_sensor.contains(&("_time".into(), "time".into())), "{of_sensor:?}");
+        assert!(of_sensor.contains(&("house".into(), "tag".into())), "{of_sensor:?}");
+        assert!(of_sensor.contains(&("temp".into(), "field".into())), "{of_sensor:?}");
+    }
+
+    #[tokio::test]
+    async fn rows_arrive_pivoted_and_paged() {
+        let Some(session) = open_test().await else {
+            return;
+        };
+
+        let ask = |limit: u32, offset: u32| Slice {
+            limit,
+            offset,
+            sort: Some(Sort { column: "_time".into(), descending: false }),
+            ..Default::default()
+        };
+
+        let page = crate::engines::slicing::table_rows(&session, "sensor", &ask(1, 0))
+            .await
+            .unwrap();
+
+        assert_eq!(page.rows.len(), 1);
+        assert!(page.columns.contains(&"temp".to_string()), "{:?}", page.columns);
+
+        let next = crate::engines::slicing::table_rows(&session, "sensor", &ask(1, 1))
+            .await
+            .unwrap();
+
+        assert_eq!(next.rows.len(), 1);
+        assert_ne!(page.rows[0], next.rows[0], "offset did not move the window");
+    }
+
+    #[tokio::test]
+    async fn a_filter_reaches_the_server() {
+        let Some(session) = open_test().await else {
+            return;
+        };
+
+        let slice = Slice {
+            limit: 100,
+            filters: vec![Filter {
+                column: "house".into(),
+                op: Op::Eq,
+                value: "b".into(),
+            }],
+            ..Default::default()
+        };
+
+        let page = crate::engines::slicing::table_rows(&session, "sensor", &slice)
+            .await
+            .unwrap();
+        let at = page.columns.iter().position(|name| name == "house").unwrap();
+
+        assert!(!page.rows.is_empty());
+        assert!(page.rows.iter().all(|row| row[at].as_deref() == Some("b")));
+    }
+}

@@ -4,10 +4,10 @@ use std::sync::{Arc, Mutex};
 
 use russh::client::{self, Handle};
 use russh::keys::key::PublicKey;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
-#[derive(Clone, Deserialize, Default)]
+#[derive(Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TunnelConfig {
     pub host: String,
@@ -20,6 +20,8 @@ pub struct TunnelConfig {
     pub key_path: String,
     #[serde(default)]
     pub passphrase: String,
+    #[serde(default)]
+    pub local_port: String,
 }
 
 impl TunnelConfig {
@@ -111,6 +113,18 @@ async fn connect(config: &TunnelConfig) -> Result<Handle<Blind>, String> {
     return Ok(session);
 }
 
+fn taken(port: u16, error: &std::io::Error) -> String {
+    if port == 0 {
+        return error.to_string();
+    }
+
+    return format!("port {port} on this machine is already in use: {error}");
+}
+
+pub fn free(port: u16) -> bool {
+    return std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+}
+
 // binds a loopback port and forwards it over ssh, so every driver keeps
 // talking plain tcp and knows nothing about the jump host
 pub async fn open(
@@ -120,9 +134,10 @@ pub async fn open(
     target_port: u16,
 ) -> Result<Tunnel, String> {
     let session = Arc::new(connect(config).await?);
-    let listener = TcpListener::bind(("127.0.0.1", 0))
+    let wanted: u16 = config.local_port.trim().parse().unwrap_or(0);
+    let listener = TcpListener::bind(("127.0.0.1", wanted))
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| taken(wanted, &error))?;
     let local_port = listener
         .local_addr()
         .map_err(|error| error.to_string())?
@@ -164,4 +179,154 @@ pub async fn open(
     });
 
     return Ok(Tunnel { local_port, stop });
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    // GPQL_TEST_SSH=host|port|user|keyPath|passphrase|dbPort
+    fn asked() -> Option<(TunnelConfig, u16)> {
+        let target = std::env::var("GPQL_TEST_SSH").ok()?;
+        let mut parts = target.splitn(6, '|');
+
+        let config = TunnelConfig {
+            host: parts.next()?.into(),
+            port: parts.next()?.into(),
+            user: parts.next()?.into(),
+            password: String::new(),
+            key_path: parts.next()?.into(),
+            passphrase: parts.next()?.into(),
+            local_port: String::new(),
+        };
+
+        return Some((config, parts.next()?.parse().ok()?));
+    }
+
+    #[tokio::test]
+    async fn a_driver_reaches_the_database_through_the_jump_host() {
+        let Some((config, db_port)) = asked() else {
+            return;
+        };
+
+        let tunnels = Tunnels::default();
+        let hop = open(&tunnels, &config, "127.0.0.1", db_port)
+            .await
+            .expect("the tunnel did not open");
+
+        let reached = crate::engines::db::SessionConfig {
+            kind: "postgres".into(),
+            host: "127.0.0.1".into(),
+            port: hop.local_port.to_string(),
+            user: "postgres".into(),
+            database: "postgres".into(),
+            tls: "disable".into(),
+            read_only: true,
+            ..Default::default()
+        };
+
+        let session = crate::engines::db::open(&reached)
+            .await
+            .expect("postgres refused the tunnelled socket");
+        let counted =
+            crate::engines::db::query(&session, "select count(*) from hop_probe")
+                .await
+                .expect("the query did not come back");
+
+        assert_eq!(counted.rows[0][0].as_deref(), Some("2"));
+    }
+
+    #[tokio::test]
+    async fn a_port_already_in_use_is_named_as_such() {
+        let Some((mut config, db_port)) = asked() else {
+            return;
+        };
+
+        let squatter = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let busy = squatter.local_addr().unwrap().port();
+
+        assert!(!free(busy));
+
+        config.local_port = busy.to_string();
+
+        let answer = open(&Tunnels::default(), &config, "127.0.0.1", db_port).await;
+        let failure = match answer {
+            Ok(_) => panic!("binding a taken port should not succeed"),
+            Err(failure) => failure,
+        };
+
+        assert!(failure.contains("already in use"), "{failure}");
+    }
+}
+
+#[cfg(test)]
+mod live_url {
+    use super::*;
+
+    // GPQL_TEST_SSH_URL=host|port|user|keyPath|passphrase|influxUrl|org|token|bucket
+    fn asked() -> Option<(TunnelConfig, crate::engines::db::SessionConfig)> {
+        let target = std::env::var("GPQL_TEST_SSH_URL").ok()?;
+        let mut parts = target.splitn(9, '|');
+
+        let hop = TunnelConfig {
+            host: parts.next()?.into(),
+            port: parts.next()?.into(),
+            user: parts.next()?.into(),
+            password: String::new(),
+            key_path: parts.next()?.into(),
+            passphrase: parts.next()?.into(),
+            local_port: String::new(),
+        };
+
+        let config = crate::engines::db::SessionConfig {
+            kind: "influxdb2".into(),
+            url: parts.next()?.into(),
+            user: parts.next()?.into(),
+            token: parts.next()?.into(),
+            database: parts.next()?.into(),
+            read_only: true,
+            tunnel: hop.clone(),
+            ..Default::default()
+        };
+
+        return Some((hop, config));
+    }
+
+    #[tokio::test]
+    async fn a_url_backend_reaches_its_server_through_the_jump_host() {
+        let Some((hop, config)) = asked() else {
+            return;
+        };
+
+        let address = url::Url::parse(config.url.trim()).unwrap();
+        let host = address.host_str().unwrap().to_string();
+        let port = address.port_or_known_default().unwrap();
+
+        let tunnels = Tunnels::default();
+        let carried = open(&tunnels, &hop, &host, port)
+            .await
+            .expect("the tunnel did not open");
+
+        let mut reached = config.clone();
+        let mut rewritten = address.clone();
+
+        rewritten.set_host(Some("127.0.0.1")).unwrap();
+        rewritten.set_port(Some(carried.local_port)).unwrap();
+        reached.url = rewritten.to_string();
+
+        assert_ne!(reached.url, config.url);
+
+        let session = crate::engines::db::open(&reached)
+            .await
+            .expect("influx refused the tunnelled url");
+        let listed = crate::engines::introspect::tables(&session)
+            .await
+            .expect("the bucket did not answer");
+
+        assert!(
+            listed.iter().any(|table| table.name == "sensor"),
+            "{:?}",
+            listed.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+    }
 }

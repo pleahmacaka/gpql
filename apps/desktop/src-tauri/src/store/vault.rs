@@ -26,6 +26,8 @@ pub struct SavedLogin {
     pub warehouse: String,
     #[serde(default)]
     pub schema: String,
+    #[serde(default)]
+    pub tunnel: crate::net::tunnel::TunnelConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -74,6 +76,7 @@ impl SavedLogin {
             tls: config.tls.clone(),
             warehouse: config.warehouse.clone(),
             schema: config.schema.clone(),
+            tunnel: config.tunnel.clone(),
         };
     }
 }
@@ -326,5 +329,50 @@ mod windows_dpapi {
 
             return Ok(take(output));
         }
+    }
+}
+
+#[cfg(test)]
+mod saving {
+    use super::*;
+
+    #[test]
+    fn a_saved_login_carries_its_jump_host_back() {
+        let mut config = SessionConfig {
+            kind: "postgres".into(),
+            host: "10.0.0.9".into(),
+            port: "5432".into(),
+            user: "app".into(),
+            database: "app".into(),
+            ..Default::default()
+        };
+
+        config.tunnel.host = "jump.example.com".into();
+        config.tunnel.port = "50022".into();
+        config.tunnel.user = "ops".into();
+        config.tunnel.key_path = "C:/keys/id_ed25519".into();
+        config.tunnel.local_port = "5433".into();
+
+        let entry = SavedLogin::from(&config);
+        let carried: SavedLogin =
+            serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+
+        assert_eq!(carried.tunnel.host, "jump.example.com");
+        assert_eq!(carried.tunnel.port, "50022");
+        assert_eq!(carried.tunnel.user, "ops");
+        assert_eq!(carried.tunnel.key_path, "C:/keys/id_ed25519");
+        assert_eq!(carried.tunnel.local_port, "5433");
+        assert!(carried.tunnel.wanted());
+    }
+
+    #[test]
+    fn a_direct_login_asks_for_no_jump_host() {
+        let config = SessionConfig {
+            kind: "sqlite".into(),
+            path: "C:/app.db".into(),
+            ..Default::default()
+        };
+
+        assert!(!SavedLogin::from(&config).tunnel.wanted());
     }
 }

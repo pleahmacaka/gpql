@@ -155,6 +155,7 @@ pub async fn export_table(
             offset,
             sort: slice.sort.clone(),
             filters: slice.filters.clone(),
+            columns: slice.columns.clone(),
         };
 
         if want.limit == 0 {

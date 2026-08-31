@@ -116,13 +116,11 @@ pub async fn schema(session: &Session) -> Result<Vec<TableSchema>, String> {
             mysql_schema(remote.columns().await?)
         }
         Engine::Duck(duck) => mysql_schema(duck.columns()?),
-        _ => counts
-            .keys()
-            .map(|name| TableSchema {
-                name: name.clone(),
-                ..Default::default()
-            })
-            .collect(),
+        Engine::Driver(driver) => match driver.columns().await? {
+            Some(listing) => mysql_schema(listing),
+            None => bare(&counts),
+        },
+        _ => bare(&counts),
     };
 
     for table in &mut out {
@@ -345,6 +343,19 @@ async fn postgres_notes(
             )
         })
         .collect());
+}
+
+fn bare(counts: &HashMap<String, i64>) -> Vec<TableSchema> {
+    let mut names: Vec<&String> = counts.keys().collect();
+    names.sort();
+
+    return names
+        .into_iter()
+        .map(|name| TableSchema {
+            name: name.clone(),
+            ..Default::default()
+        })
+        .collect();
 }
 
 fn mysql_schema(listing: QueryResult) -> Vec<TableSchema> {

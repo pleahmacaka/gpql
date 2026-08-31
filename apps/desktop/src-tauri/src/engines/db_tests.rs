@@ -93,8 +93,7 @@ mod live {
         return Slice {
             limit,
             offset,
-            sort: None,
-            filters: Vec::new(),
+            ..Default::default()
         };
     }
 

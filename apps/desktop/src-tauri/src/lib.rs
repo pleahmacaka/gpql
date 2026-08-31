@@ -33,16 +33,27 @@ use tauri::State;
 use vault::{Credential, Provider, SavedLogin};
 
 #[tauri::command]
-async fn check(config: SessionConfig) -> Result<String, String> {
-    let session = db::open(&config).await?;
+async fn check(
+    config: SessionConfig,
+    tunnels: State<'_, Tunnels>,
+) -> Result<String, String> {
+    // the probe has to take the same route the connection will, or it reports
+    // on a server the driver is never going to reach
+    let (reached, _hop) = through(&config, &tunnels).await?;
+    let session = db::open(&reached).await?;
 
     let probe = match (config.kind.as_str(), backends::dialect_of(&config.kind)) {
         ("sqlite", _) => "select 'sqlite ' || sqlite_version()",
         (_, "cypher") => "return 1",
         (_, "flux") => {
             let listed = introspect::tables(&session).await?;
+            let what = if config.database.is_empty() {
+                "buckets"
+            } else {
+                "measurements"
+            };
 
-            return Ok(format!("{} buckets", listed.len()));
+            return Ok(format!("{} {what}", listed.len()));
         }
         ("clickhouse", _) => "select version()",
         ("snowflake", _) => "select current_version()",
@@ -58,6 +69,59 @@ async fn check(config: SessionConfig) -> Result<String, String> {
         .first()
         .and_then(|row| row.first().cloned().flatten())
         .unwrap_or_else(|| "reachable".into()));
+}
+
+// the driver is pointed at a loopback port and never learns there is a jump
+// host in front of the server
+async fn through(
+    config: &SessionConfig,
+    tunnels: &Tunnels,
+) -> Result<(SessionConfig, Option<tunnel::Tunnel>), String> {
+    if !config.tunnel.wanted() {
+        return Ok((config.clone(), None));
+    }
+
+    let mut reached = config.clone();
+
+    // a url backend carries its address inside the url, so the hop is dialled
+    // from there and the url is rewritten to the loopback port
+    if !config.url.trim().is_empty() {
+        let mut address = url::Url::parse(config.url.trim())
+            .map_err(|error| format!("that URL cannot be read: {error}"))?;
+        let host = address
+            .host_str()
+            .ok_or_else(|| "that URL names no host to reach".to_string())?
+            .to_string();
+        let port = address
+            .port_or_known_default()
+            .ok_or_else(|| "that URL names no port to reach".to_string())?;
+
+        let hop = tunnel::open(tunnels, &config.tunnel, &host, port).await?;
+
+        address
+            .set_host(Some("127.0.0.1"))
+            .map_err(|error| error.to_string())?;
+        address
+            .set_port(Some(hop.local_port))
+            .map_err(|_| "that URL will not take a port".to_string())?;
+
+        reached.url = address.to_string();
+
+        return Ok((reached, Some(hop)));
+    }
+
+    let target = if config.host.trim().is_empty() {
+        "127.0.0.1"
+    } else {
+        config.host.trim()
+    };
+    let port = config.port.trim().parse().unwrap_or(5432);
+    let hop = tunnel::open(tunnels, &config.tunnel, target, port).await?;
+
+    reached.host = "127.0.0.1".into();
+    reached.port = hop.local_port.to_string();
+
+    return Ok((reached, Some(hop)));
 }
 
 #[derive(serde::Deserialize)]
@@ -174,6 +238,15 @@ async fn databases(config: SessionConfig) -> Result<Vec<String>, String> {
         return supabase_projects(&config.token).await;
     }
 
+    if config.kind == "influxdb2" {
+        let session = db::open(&config).await?;
+
+        return match &session.engine {
+            db::Engine::Driver(driver) => driver.databases().await,
+            _ => Ok(Vec::new()),
+        };
+    }
+
     let listing = match crate::backends::transport_of(&config.kind) {
         Transport::Postgres => "select datname from pg_database where datistemplate = false order by 1",
         Transport::MySql => "show databases",
@@ -238,27 +311,7 @@ async fn connect(
     sessions: State<'_, Sessions>,
     tunnels: State<'_, Tunnels>,
 ) -> Result<SessionHandle, String> {
-    // the driver is pointed at a loopback port and never learns there is a
-    // jump host in front of the server
-    let (reached, hop) = if config.tunnel.wanted() {
-        let target = if config.host.trim().is_empty() {
-            "127.0.0.1"
-        } else {
-            config.host.trim()
-        };
-        let port = config.port.trim().parse().unwrap_or(5432);
-        let hop = tunnel::open(&tunnels, &config.tunnel, target, port).await?;
-
-        let mut through = config.clone();
-
-        through.host = "127.0.0.1".into();
-        through.port = hop.local_port.to_string();
-
-        (through, Some(hop))
-    } else {
-        (config.clone(), None)
-    };
-
+    let (reached, hop) = through(&config, &tunnels).await?;
     let session = db::open(&reached).await?;
 
     vault::remember(&config)?;
@@ -437,6 +490,19 @@ async fn set_read_only(
 }
 
 #[tauri::command]
+fn built_query(
+    id: String,
+    table: String,
+    slice: slicing::Slice,
+    shape: slicing::Shape,
+    sessions: State<'_, Sessions>,
+) -> Result<String, String> {
+    let session = sessions.get(&id)?;
+
+    return Ok(slicing::shaped_query(&session, &table, &slice, &shape));
+}
+
+#[tauri::command]
 async fn table_rows(
     id: String,
     table: String,
@@ -600,13 +666,21 @@ async fn scan_tailnet() -> Vec<Discovery> {
     return found;
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SharedErd {
+    id: String,
+    link: String,
+    open: bool,
+}
+
 #[tauri::command]
 async fn publish_schema(
     site: String,
     name: String,
     sessions: State<'_, Sessions>,
     session_id: String,
-) -> Result<String, String> {
+) -> Result<SharedErd, String> {
     let token = vault::account_token().ok_or_else(|| "sign in first".to_string())?;
     let session = sessions.get(&session_id)?;
     let tables = introspect::schema(&session).await?;
@@ -627,11 +701,43 @@ async fn publish_schema(
         .and_then(|value| value.as_str())
         .ok_or_else(|| "the site did not hand back a room".to_string())?;
 
-    let link = format!("{}/erd/{id}", site.trim_end_matches('/'));
+    return Ok(SharedErd {
+        id: id.to_string(),
+        link: format!("{}/erd/{id}", site.trim_end_matches('/')),
+        open: false,
+    });
+}
 
-    tauri_plugin_opener::open_url(&link, None::<&str>).map_err(|e| e.to_string())?;
+#[tauri::command]
+async fn share_erd(site: String, id: String, open: bool) -> Result<bool, String> {
+    let token = vault::account_token().ok_or_else(|| "sign in first".to_string())?;
 
-    return Ok(link);
+    let answer: serde_json::Value = reqwest::Client::new()
+        .patch(format!("{}/api/erd", site.trim_end_matches('/')))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "id": id, "open": open }))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .json()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    return Ok(answer
+        .get("open")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(open));
+}
+
+#[tauri::command]
+fn open_link(url: String) -> Result<(), String> {
+    return tauri_plugin_opener::open_url(&url, None::<&str>)
+        .map_err(|error| error.to_string());
+}
+
+#[tauri::command]
+fn port_free(port: u16) -> bool {
+    return tunnel::free(port);
 }
 
 #[tauri::command]
@@ -823,6 +929,85 @@ fn logins_location() -> String {
         .unwrap_or_default();
 }
 
+// openssh writes the public half beside the private one and keeps its own
+// bookkeeping in the same folder, so neither belongs in the list
+fn keys_in(folder: &std::path::Path) -> Vec<String> {
+    const NOT_KEYS: [&str; 4] =
+        ["config", "known_hosts", "known_hosts.old", "authorized_keys"];
+
+    let Ok(listing) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+
+    let mut found: Vec<String> = listing
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            !name.ends_with(".pub") && !NOT_KEYS.contains(&name.as_str())
+        })
+        .map(|entry| entry.path().display().to_string())
+        .collect();
+
+    found.sort();
+
+    return found;
+}
+
+#[tauri::command]
+fn ssh_keys() -> Vec<String> {
+    let Some(folder) = dirs::home_dir().map(|home| home.join(".ssh")) else {
+        return Vec::new();
+    };
+
+    return keys_in(&folder);
+}
+
+#[cfg(test)]
+mod ssh_folder {
+    use super::*;
+
+    #[test]
+    fn only_private_keys_are_offered() {
+        let folder = std::env::temp_dir().join("gpql_ssh_probe");
+
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+
+        for name in [
+            "id_ed25519",
+            "id_ed25519.pub",
+            "id_rsa",
+            "known_hosts",
+            "config",
+            "authorized_keys",
+        ] {
+            std::fs::write(folder.join(name), "x").unwrap();
+        }
+
+        let named: Vec<String> = keys_in(&folder)
+            .into_iter()
+            .map(|path| {
+                std::path::Path::new(&path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+
+        assert_eq!(named, ["id_ed25519", "id_rsa"]);
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_missing_folder_is_not_an_error() {
+        assert!(keys_in(std::path::Path::new("no such folder here")).is_empty());
+    }
+}
+
 #[tauri::command]
 fn account_token() -> Option<String> {
     return vault::account_token();
@@ -877,6 +1062,7 @@ pub fn run() {
             schemas,
             use_schema,
             table_rows,
+            built_query,
             set_read_only,
             set_manual,
             end_transaction,
@@ -897,7 +1083,10 @@ pub fn run() {
             scan_local,
             scan_tailnet,
             tailnet_peers,
+            port_free,
             publish_schema,
+            share_erd,
+            open_link,
             backends,
             credentials,
             save_credential,
@@ -914,6 +1103,7 @@ pub fn run() {
             forget_all_logins,
             logins_location,
             account_token,
+            ssh_keys,
             set_account_token,
             forget_account,
             local_query,

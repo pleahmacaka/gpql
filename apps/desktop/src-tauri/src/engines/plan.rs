@@ -124,6 +124,78 @@ fn shape_sqlite(result: &QueryResult) -> Option<PlanNode> {
     });
 }
 
+// datafusion answers with one row per plan and keeps the whole plan, already
+// indented, in the last cell of that row
+fn plans(result: &QueryResult) -> String {
+    return result
+        .rows
+        .iter()
+        .filter_map(|row| row.last().cloned().flatten())
+        .collect::<Vec<_>>()
+        .join("\n");
+}
+
+fn shape_datafusion(text: &str) -> Option<PlanNode> {
+    let mut stack: Vec<(usize, PlanNode)> = Vec::new();
+    let mut roots: Vec<PlanNode> = Vec::new();
+
+    fn close(
+        depth: usize,
+        stack: &mut Vec<(usize, PlanNode)>,
+        roots: &mut Vec<PlanNode>,
+    ) {
+        while stack.last().map(|(open, _)| *open >= depth).unwrap_or(false) {
+            let (_, done) = stack.pop().unwrap();
+
+            match stack.last_mut() {
+                Some((_, parent)) => parent.children.push(done),
+                None => roots.push(done),
+            }
+        }
+    }
+
+    for line in text.lines() {
+        let body = line.trim_start();
+
+        if body.is_empty() {
+            continue;
+        }
+
+        let depth = line.len() - body.len();
+        let (label, detail) = match body.split_once(", metrics=") {
+            Some((head, metrics)) => (head.to_string(), metrics.to_string()),
+            None => (body.to_string(), String::new()),
+        };
+
+        close(depth, &mut stack, &mut roots);
+
+        stack.push((
+            depth,
+            PlanNode {
+                label,
+                detail,
+                ..Default::default()
+            },
+        ));
+    }
+
+    close(0, &mut stack, &mut roots);
+
+    if roots.len() == 1 {
+        return roots.pop();
+    }
+
+    if roots.is_empty() {
+        return None;
+    }
+
+    return Some(PlanNode {
+        label: "query plan".into(),
+        children: roots,
+        ..Default::default()
+    });
+}
+
 pub async fn explain(
     session: &Session,
     sql: &str,
@@ -186,6 +258,77 @@ pub async fn explain(
                 text: flat(&result),
             })
         }
+        Engine::Driver(_) if session.kind == "influxdb" => {
+            let mode = if analyze { "explain analyze" } else { "explain" };
+            let result = query(session, &format!("{mode} {sql}")).await?;
+            let text = plans(&result);
+
+            Ok(Plan {
+                tree: shape_datafusion(&text),
+                text,
+            })
+        }
         _ => Err("this engine does not explain queries".into()),
     };
+}
+
+#[cfg(test)]
+mod datafusion {
+    use super::*;
+
+    #[test]
+    fn nests_by_indentation() {
+        let tree = shape_datafusion(
+            "ProjectionExec: expr=[a]\n  FilterExec: b > 1, metrics=[output_rows=3]\n    ParquetExec: file_groups={1 group}",
+        )
+        .unwrap();
+
+        assert_eq!(tree.label, "ProjectionExec: expr=[a]");
+        assert_eq!(tree.children.len(), 1);
+        assert_eq!(tree.children[0].detail, "[output_rows=3]");
+        assert_eq!(tree.children[0].children[0].label, "ParquetExec: file_groups={1 group}");
+    }
+
+    // captured from influxdb 3.8.3 answering `explain analyze select house,
+    // temp from sensor where temp > 20`
+    #[test]
+    fn reads_a_real_influx_plan() {
+        let answered = concat!(
+            "CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=1]
+",
+            "  FilterExec: temp@1 > 20, metrics=[output_rows=1]
+",
+            "    RepartitionExec: partitioning=RoundRobinBatch(16)
+",
+            "      ProjectionExec: expr=[house@0 as house]
+",
+            "        DeduplicateExec: [house@0 ASC,time@2 ASC]
+",
+            "          RecordBatches",
+        );
+
+        let tree = shape_datafusion(answered).unwrap();
+
+        assert_eq!(tree.label, "CoalesceBatchesExec: target_batch_size=8192");
+        assert_eq!(tree.detail, "[output_rows=1]");
+
+        let mut walk = &tree;
+        let mut depth = 1;
+
+        while let Some(child) = walk.children.first() {
+            walk = child;
+            depth += 1;
+        }
+
+        assert_eq!(depth, 6);
+        assert_eq!(walk.label, "RecordBatches");
+    }
+
+    #[test]
+    fn wraps_several_plans() {
+        let tree = shape_datafusion("logical_plan\nphysical_plan").unwrap();
+
+        assert_eq!(tree.label, "query plan");
+        assert_eq!(tree.children.len(), 2);
+    }
 }
