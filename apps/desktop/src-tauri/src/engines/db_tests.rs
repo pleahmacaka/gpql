@@ -5,10 +5,6 @@ use crate::engines::slicing::{
     like_pattern, predicate, table_rows, Filter, Op, Slice, Sort,
 };
 use crate::engines::writing::{apply, edit_statements, finish, set_manual, Edit};
-use crate::engines::ddl::table_ddl;
-use crate::engines::export::{export_table, Format};
-use crate::engines::objects::objects;
-use crate::engines::plan::explain;
 
 mod tests {
     use super::*;
@@ -503,7 +499,7 @@ mod transacting {
 mod defining {
     use super::*;
     use live_support::*;
-    use crate::engines::ddl::table_ddl;
+    use crate::engines::ddl::object_ddl;
     use crate::engines::plan::explain;
 
     #[tokio::test]
@@ -512,7 +508,7 @@ mod defining {
             return;
         };
 
-        let text = table_ddl(&session, "book").await.unwrap();
+        let text = object_ddl(&session, "book", None, None).await.unwrap();
 
         // the point of rebuilding from the catalog is exactness, so the
         // result has to be something the server will take back
@@ -539,7 +535,7 @@ mod defining {
             return;
         };
 
-        let text = table_ddl(&session, "book").await.unwrap();
+        let text = object_ddl(&session, "book", None, None).await.unwrap();
 
         assert!(text.contains("character varying(200)"), "{text}");
         assert!(text.contains("numeric(10,2)"), "{text}");
@@ -557,7 +553,7 @@ mod defining {
             return;
         };
 
-        let text = table_ddl(&session, "cheap_books").await.unwrap();
+        let text = object_ddl(&session, "cheap_books", None, None).await.unwrap();
 
         assert!(text.starts_with("create view \"cheap_books\" as"), "{text}");
         assert!(text.contains("price"), "{text}");

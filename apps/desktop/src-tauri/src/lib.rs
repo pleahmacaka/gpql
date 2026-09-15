@@ -3,40 +3,35 @@ mod engines;
 mod net;
 mod store;
 
+use crate::editor::highlight;
+use crate::editor::lsp;
 use crate::engines::backends;
 use crate::engines::db;
-use crate::engines::discovery;
 use crate::engines::ddl;
+use crate::engines::discovery;
 use crate::engines::export;
 use crate::engines::objects;
 use crate::engines::plan;
-use crate::editor::highlight;
-use crate::editor::lsp;
-use crate::store::local;
-use crate::store::vault;
 use crate::net::login;
 use crate::net::tailnet;
 use crate::net::tunnel::{self, Tunnels};
+use crate::store::local;
+use crate::store::vault;
 
 use crate::engines::introspect;
 use crate::engines::slicing;
 use crate::engines::writing;
-use db::{
-    QueryResult, SessionConfig, SessionHandle, Sessions, TableInfo, TableSchema,
-};
+use db::{QueryResult, SessionConfig, SessionHandle, Sessions, TableInfo, TableSchema};
 use discovery::Discovery;
 use highlight::{Highlighter, Token};
 use local::Local;
 use lsp::{Completion, Servers};
 use serde_json::Value as Json;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use vault::{Credential, Provider, SavedLogin};
 
 #[tauri::command]
-async fn check(
-    config: SessionConfig,
-    tunnels: State<'_, Tunnels>,
-) -> Result<String, String> {
+async fn check(config: SessionConfig, tunnels: State<'_, Tunnels>) -> Result<String, String> {
     // the probe has to take the same route the connection will, or it reports
     // on a server the driver is never going to reach
     let (reached, _hop) = through(&config, &tunnels).await?;
@@ -54,6 +49,11 @@ async fn check(
             };
 
             return Ok(format!("{} {what}", listed.len()));
+        }
+        ("mqtt", _) => {
+            let listed = introspect::tables(&session).await?;
+
+            return Ok(format!("{} topics", listed.len()));
         }
         ("clickhouse", _) => "select version()",
         ("snowflake", _) => "select current_version()",
@@ -115,7 +115,11 @@ async fn through(
     } else {
         config.host.trim()
     };
-    let port = config.port.trim().parse().unwrap_or(5432);
+    let port = config.port.trim().parse().unwrap_or_else(|_| {
+        crate::backends::find(&config.kind)
+            .and_then(|backend| backend.port.parse().ok())
+            .unwrap_or(5432)
+    });
     let hop = tunnel::open(tunnels, &config.tunnel, target, port).await?;
 
     reached.host = "127.0.0.1".into();
@@ -143,7 +147,11 @@ async fn probe_recents(items: Vec<Waypoint>) -> Vec<String> {
         let login = logins
             .iter()
             .find(|saved| saved.url == item.url)
-            .or_else(|| logins.iter().find(|saved| tail(&saved.url) == tail(&item.url)))?;
+            .or_else(|| {
+                logins
+                    .iter()
+                    .find(|saved| tail(&saved.url) == tail(&item.url))
+            })?;
 
         if !login.path.is_empty() {
             return Some(Look::File(login.path.clone()));
@@ -158,7 +166,11 @@ async fn probe_recents(items: Vec<Waypoint>) -> Vec<String> {
             return address_of(&format!(
                 "{}:{}",
                 login.host,
-                if login.port.is_empty() { fallback } else { &login.port }
+                if login.port.is_empty() {
+                    fallback
+                } else {
+                    &login.port
+                }
             ))
             .map(|(host, port)| Look::Port(host, port));
         }
@@ -248,7 +260,9 @@ async fn databases(config: SessionConfig) -> Result<Vec<String>, String> {
     }
 
     let listing = match crate::backends::transport_of(&config.kind) {
-        Transport::Postgres => "select datname from pg_database where datistemplate = false order by 1",
+        Transport::Postgres => {
+            "select datname from pg_database where datistemplate = false order by 1"
+        }
         Transport::MySql => "show databases",
         _ => return Ok(Vec::new()),
     };
@@ -308,6 +322,7 @@ async fn supabase_projects(token: &str) -> Result<Vec<String>, String> {
 #[tauri::command]
 async fn connect(
     config: SessionConfig,
+    app: AppHandle,
     sessions: State<'_, Sessions>,
     tunnels: State<'_, Tunnels>,
 ) -> Result<SessionHandle, String> {
@@ -320,6 +335,18 @@ async fn connect(
 
     if let Some(hop) = hop {
         tunnels.keep(&handle.id, hop);
+    }
+
+    if let Ok(open) = sessions.get(&handle.id) {
+        let app = app.clone();
+        let target = handle.id.clone();
+
+        open.on_catalog_change(move |topic| {
+            let _ = app.emit(
+                "catalog-changed",
+                serde_json::json!({ "session": target, "topic": topic }),
+            );
+        });
     }
 
     return Ok(handle);
@@ -382,14 +409,86 @@ async fn objects(
 }
 
 #[tauri::command]
-async fn table_ddl(
+async fn object_ddl(
     id: String,
-    table: String,
+    name: String,
+    kind: Option<String>,
+    detail: Option<String>,
     sessions: State<'_, Sessions>,
 ) -> Result<String, String> {
     let session = sessions.get(&id)?;
 
-    return ddl::table_ddl(&session, &table).await;
+    return ddl::object_ddl(&session, &name, kind.as_deref(), detail.as_deref()).await;
+}
+
+#[tauri::command]
+async fn mqtt_publish(
+    id: String,
+    topic: String,
+    payload: String,
+    qos: u8,
+    retain: bool,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    if session.read_only.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("this session is read only".into());
+    }
+
+    return session.mqtt()?.publish(&topic, &payload, qos, retain).await;
+}
+
+#[tauri::command]
+async fn mqtt_clear(
+    id: String,
+    topic: String,
+    app: AppHandle,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    session.mqtt()?.clear(&topic);
+
+    let _ = app.emit(
+        "catalog-changed",
+        serde_json::json!({ "session": id, "topic": topic }),
+    );
+
+    return Ok(());
+}
+
+#[tauri::command]
+async fn mqtt_subscribe(
+    id: String,
+    filter: String,
+    qos: u8,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    return session.mqtt()?.subscribe(&filter, qos).await;
+}
+
+#[tauri::command]
+async fn mqtt_unsubscribe(
+    id: String,
+    filter: String,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    return session.mqtt()?.unsubscribe(&filter).await;
+}
+
+#[tauri::command]
+async fn mqtt_subscriptions(
+    id: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<crate::engines::mqtt::Subscription>, String> {
+    let session = sessions.get(&id)?;
+
+    return Ok(session.mqtt()?.subscriptions());
 }
 
 #[tauri::command]
@@ -425,11 +524,7 @@ async fn schemas(id: String, sessions: State<'_, Sessions>) -> Result<Vec<String
 }
 
 #[tauri::command]
-async fn use_schema(
-    id: String,
-    name: String,
-    sessions: State<'_, Sessions>,
-) -> Result<(), String> {
+async fn use_schema(id: String, name: String, sessions: State<'_, Sessions>) -> Result<(), String> {
     let session = sessions.get(&id)?;
 
     return introspect::use_schema(&session, &name).await;
@@ -445,11 +540,7 @@ fn check_sql(
 }
 
 #[tauri::command]
-async fn set_manual(
-    id: String,
-    on: bool,
-    sessions: State<'_, Sessions>,
-) -> Result<(), String> {
+async fn set_manual(id: String, on: bool, sessions: State<'_, Sessions>) -> Result<(), String> {
     let session = sessions.get(&id)?;
 
     return writing::set_manual(&session, on).await;
@@ -479,11 +570,7 @@ fn pending_edits(
 }
 
 #[tauri::command]
-async fn set_read_only(
-    id: String,
-    on: bool,
-    sessions: State<'_, Sessions>,
-) -> Result<(), String> {
+async fn set_read_only(id: String, on: bool, sessions: State<'_, Sessions>) -> Result<(), String> {
     let session = sessions.get(&id)?;
 
     return writing::set_read_only(&session, on).await;
@@ -545,11 +632,7 @@ async fn schema(id: String, sessions: State<'_, Sessions>) -> Result<Vec<TableSc
 }
 
 #[tauri::command]
-fn highlight_sql(
-    sql: String,
-    dialect: String,
-    highlighter: State<'_, Highlighter>,
-) -> Vec<Token> {
+fn highlight_sql(sql: String, dialect: String, highlighter: State<'_, Highlighter>) -> Vec<Token> {
     return highlighter.tokens(&dialect, &sql);
 }
 
@@ -635,7 +718,7 @@ fn look_on_this_machine() -> Vec<u16> {
 fn probe_credentials() -> Vec<(String, String)> {
     let mut candidates: Vec<(String, String)> = vault::list()
         .into_iter()
-        .filter(|login| login.kind == "postgres")
+        .filter(|login| !login.user.is_empty())
         .map(|login| (login.user, login.password))
         .collect();
 
@@ -731,8 +814,7 @@ async fn share_erd(site: String, id: String, open: bool) -> Result<bool, String>
 
 #[tauri::command]
 fn open_link(url: String) -> Result<(), String> {
-    return tauri_plugin_opener::open_url(&url, None::<&str>)
-        .map_err(|error| error.to_string());
+    return tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|error| error.to_string());
 }
 
 #[tauri::command]
@@ -932,8 +1014,12 @@ fn logins_location() -> String {
 // openssh writes the public half beside the private one and keeps its own
 // bookkeeping in the same folder, so neither belongs in the list
 fn keys_in(folder: &std::path::Path) -> Vec<String> {
-    const NOT_KEYS: [&str; 4] =
-        ["config", "known_hosts", "known_hosts.old", "authorized_keys"];
+    const NOT_KEYS: [&str; 4] = [
+        "config",
+        "known_hosts",
+        "known_hosts.old",
+        "authorized_keys",
+    ];
 
     let Ok(listing) = std::fs::read_dir(folder) else {
         return Vec::new();
@@ -1024,7 +1110,11 @@ fn forget_account() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn local_query(sql: String, params: Vec<Json>, store: State<'_, Local>) -> Result<Vec<Vec<Json>>, String> {
+fn local_query(
+    sql: String,
+    params: Vec<Json>,
+    store: State<'_, Local>,
+) -> Result<Vec<Vec<Json>>, String> {
     return local::run(&store, &sql, &params);
 }
 
@@ -1037,7 +1127,7 @@ fn local_batch(sql: String, store: State<'_, Local>) -> Result<(), String> {
 pub fn run() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Sessions::default())
@@ -1054,7 +1144,12 @@ pub fn run() {
             disconnect,
             reset_sessions,
             objects,
-            table_ddl,
+            object_ddl,
+            mqtt_publish,
+            mqtt_clear,
+            mqtt_subscribe,
+            mqtt_unsubscribe,
+            mqtt_subscriptions,
             explain_query,
             export_table,
             export_result,
@@ -1118,8 +1213,36 @@ pub fn run() {
                 )?;
             }
 
+            #[cfg(all(debug_assertions, windows))]
+            {
+                use tauri::Manager;
+
+                let mut config = app.config().app.windows[0].clone();
+                config.label = "debug".to_string();
+
+                let debug_window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                    .data_directory(std::env::temp_dir().join("gpql-debug-webview"))
+                    .additional_browser_args(
+                        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+                         --autoplay-policy=no-user-gesture-required \
+                         --remote-debugging-port=9222",
+                    )
+                    .build()?;
+
+                if let Some(main) = app.get_webview_window("main") {
+                    main.close()?;
+                }
+
+                debug_window.set_focus()?;
+            }
+
             Ok(())
-        })
+        });
+
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

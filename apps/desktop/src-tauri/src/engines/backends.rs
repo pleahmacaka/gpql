@@ -36,11 +36,7 @@ pub struct Backend {
     pub transport: Transport,
 }
 
-const fn field(
-    key: &'static str,
-    label: &'static str,
-    placeholder: &'static str,
-) -> Field {
+const fn field(key: &'static str, label: &'static str, placeholder: &'static str) -> Field {
     return Field {
         key,
         label,
@@ -133,6 +129,15 @@ const CLICKHOUSE: &[Field] = &[
     field("user", "User", "default"),
     secret("password", "Password"),
     field("database", "Database", "default"),
+];
+
+const MQTT: &[Field] = &[
+    field("host", "Host", "127.0.0.1"),
+    field("port", "Port", ""),
+    field("user", "User", ""),
+    secret("password", "Password"),
+    field("database", "Topic filter", "#"),
+    field("tls", "TLS", ""),
 ];
 
 // ordered by how many developers reach for them, so the picker opens on
@@ -288,6 +293,16 @@ pub const CATALOG: &[Backend] = &[
         wip: true,
         transport: Transport::Redis,
     },
+    Backend {
+        id: "mqtt",
+        label: "MQTT",
+        dialect: "mqtt",
+        icon: "simple-icons:mqtt",
+        port: "1883",
+        fields: MQTT,
+        wip: true,
+        transport: Transport::Driver,
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static Backend> {
@@ -299,5 +314,7 @@ pub fn dialect_of(id: &str) -> &'static str {
 }
 
 pub fn transport_of(id: &str) -> Transport {
-    return find(id).map(|backend| backend.transport).unwrap_or(Transport::Postgres);
+    return find(id)
+        .map(|backend| backend.transport)
+        .unwrap_or(Transport::Postgres);
 }

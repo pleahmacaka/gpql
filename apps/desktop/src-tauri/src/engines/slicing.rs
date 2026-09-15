@@ -130,6 +130,12 @@ pub async fn table_rows(
     table: &str,
     slice: &Slice,
 ) -> Result<QueryResult, String> {
+    if let Engine::Driver(driver) = &session.engine {
+        if let Some(page) = driver.page(table, slice).await {
+            return page;
+        }
+    }
+
     return query(session, &rows_query(session, table, slice)).await;
 }
 
@@ -139,12 +145,7 @@ pub fn rows_query(session: &Session, table: &str, slice: &Slice) -> String {
     return shaped_query(session, table, slice, &Shape::default());
 }
 
-pub fn shaped_query(
-    session: &Session,
-    table: &str,
-    slice: &Slice,
-    shape: &Shape,
-) -> String {
+pub fn shaped_query(session: &Session, table: &str, slice: &Slice, shape: &Shape) -> String {
     let limit = slice.limit;
 
     if let Engine::Driver(driver) = &session.engine {

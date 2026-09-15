@@ -127,6 +127,19 @@ impl Session {
     pub fn set_read_only(&self, on: bool) {
         self.read_only.store(on, Ordering::Relaxed);
     }
+
+    pub fn on_catalog_change(&self, notify: impl Fn(&str) + Send + 'static) {
+        if let Engine::Driver(driver) = &self.engine {
+            driver.on_catalog_change(Box::new(notify));
+        }
+    }
+
+    pub fn mqtt(&self) -> Result<&crate::engines::mqtt::Mqtt, String> {
+        return match &self.engine {
+            Engine::Driver(driver) => driver.mqtt(),
+            _ => Err("not an mqtt session".to_string()),
+        };
+    }
 }
 
 impl Sessions {
@@ -201,8 +214,22 @@ fn pg_conn_string(config: &SessionConfig) -> String {
         out.push_str(&format!("{key}='{escaped}' "));
     };
 
-    push("host", if config.host.is_empty() { "127.0.0.1" } else { &config.host });
-    push("port", if config.port.is_empty() { "5432" } else { &config.port });
+    push(
+        "host",
+        if config.host.is_empty() {
+            "127.0.0.1"
+        } else {
+            &config.host
+        },
+    );
+    push(
+        "port",
+        if config.port.is_empty() {
+            "5432"
+        } else {
+            &config.port
+        },
+    );
     push("user", &config.user);
     push("password", &config.password);
     push("dbname", &config.database);
@@ -246,8 +273,16 @@ fn open_duck(config: &SessionConfig) -> Result<Session, String> {
 }
 
 async fn open_mysql(config: &SessionConfig) -> Result<Session, String> {
-    let host = if config.host.is_empty() { "127.0.0.1" } else { &config.host };
-    let port = if config.port.is_empty() { "3306" } else { &config.port };
+    let host = if config.host.is_empty() {
+        "127.0.0.1"
+    } else {
+        &config.host
+    };
+    let port = if config.port.is_empty() {
+        "3306"
+    } else {
+        &config.port
+    };
 
     return Ok(Session {
         engine: Engine::MySql(crate::engines::mysql::MySql::open(config).await?),
@@ -304,10 +339,12 @@ async fn open_driver(config: &SessionConfig) -> Result<Session, String> {
         config.database.clone()
     };
 
-    let detail = if config.url.is_empty() {
+    let detail = if !config.url.is_empty() {
+        config.url.clone()
+    } else if config.port.is_empty() {
         config.host.clone()
     } else {
-        config.url.clone()
+        format!("{}:{}", config.host, config.port)
     };
 
     return Ok(Session {
@@ -381,25 +418,27 @@ fn install_crypto() {
     });
 }
 
-fn tls_connector(verify: bool) -> MakeRustlsConnect {
+pub(crate) fn tls_config(verify: bool) -> rustls::ClientConfig {
     install_crypto();
 
-    let settings = if verify {
+    if verify {
         let roots = rustls::RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
         };
 
-        rustls::ClientConfig::builder()
+        return rustls::ClientConfig::builder()
             .with_root_certificates(roots)
-            .with_no_client_auth()
-    } else {
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(std::sync::Arc::new(SkipChainCheck))
-            .with_no_client_auth()
-    };
+            .with_no_client_auth();
+    }
 
-    return MakeRustlsConnect::new(settings);
+    return rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(SkipChainCheck))
+        .with_no_client_auth();
+}
+
+fn tls_connector(verify: bool) -> MakeRustlsConnect {
+    return MakeRustlsConnect::new(tls_config(verify));
 }
 
 // libpq sslmode=require encrypts without checking the chain; hosts behind a
@@ -445,7 +484,11 @@ impl rustls::client::danger::ServerCertVerifier for SkipChainCheck {
 }
 
 async fn open_postgres(config: &SessionConfig) -> Result<Session, String> {
-    let wanted = if config.tls.is_empty() { "prefer" } else { &config.tls };
+    let wanted = if config.tls.is_empty() {
+        "prefer"
+    } else {
+        &config.tls
+    };
     let conn_string = pg_conn_string(config);
 
     let client = match wanted {
@@ -465,8 +508,16 @@ async fn open_postgres(config: &SessionConfig) -> Result<Session, String> {
             .map_err(friendly_pg)?;
     }
 
-    let host = if config.host.is_empty() { "127.0.0.1" } else { &config.host };
-    let port = if config.port.is_empty() { "5432" } else { &config.port };
+    let host = if config.host.is_empty() {
+        "127.0.0.1"
+    } else {
+        &config.host
+    };
+    let port = if config.port.is_empty() {
+        "5432"
+    } else {
+        &config.port
+    };
 
     return Ok(Session {
         engine: Engine::Postgres(client),
@@ -479,10 +530,7 @@ async fn open_postgres(config: &SessionConfig) -> Result<Session, String> {
     });
 }
 
-async fn secure(
-    conn_string: &str,
-    verify: bool,
-) -> Result<tokio_postgres::Client, String> {
+async fn secure(conn_string: &str, verify: bool) -> Result<tokio_postgres::Client, String> {
     let (client, connection) = tokio_postgres::connect(conn_string, tls_connector(verify))
         .await
         .map_err(friendly_pg)?;
@@ -609,7 +657,10 @@ pub async fn query(session: &Session, sql: &str) -> Result<QueryResult, String> 
     }
 }
 
-pub async fn query_postgres(client: &tokio_postgres::Client, sql: &str) -> Result<QueryResult, String> {
+pub async fn query_postgres(
+    client: &tokio_postgres::Client,
+    sql: &str,
+) -> Result<QueryResult, String> {
     let messages = client.simple_query(sql).await.map_err(friendly_pg)?;
 
     let mut columns: Vec<String> = Vec::new();
@@ -634,7 +685,11 @@ pub async fn query_postgres(client: &tokio_postgres::Client, sql: &str) -> Resul
         }
     }
 
-    return Ok(QueryResult { columns, rows, affected });
+    return Ok(QueryResult {
+        columns,
+        rows,
+        affected,
+    });
 }
 
 pub fn query_sqlite(connection: &Connection, sql: &str) -> Result<QueryResult, String> {
@@ -671,7 +726,11 @@ pub fn query_sqlite(connection: &Connection, sql: &str) -> Result<QueryResult, S
         rows.push(values);
     }
 
-    return Ok(QueryResult { columns, rows, affected: None });
+    return Ok(QueryResult {
+        columns,
+        rows,
+        affected: None,
+    });
 }
 
 fn cell_text(value: ValueRef<'_>) -> Option<String> {
@@ -683,7 +742,6 @@ fn cell_text(value: ValueRef<'_>) -> Option<String> {
         ValueRef::Blob(bytes) => Some(format!("{} bytes", bytes.len())),
     }
 }
-
 
 #[cfg(test)]
 #[path = "db_tests.rs"]

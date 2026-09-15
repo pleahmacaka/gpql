@@ -10,6 +10,7 @@ pub enum Driver {
     Snow(Box<snowflake_api::SnowflakeApi>),
     Influx(Influx),
     Influx3(Box<influxdb3_client::Client>),
+    Mqtt(crate::engines::mqtt::Mqtt),
 }
 
 pub struct Influx {
@@ -87,6 +88,9 @@ impl Driver {
                         .map_err(|error| error.to_string())?,
                 )))
             }
+            "mqtt" => Ok(Driver::Mqtt(
+                crate::engines::mqtt::Mqtt::open(config).await?,
+            )),
             other => Err(format!("{other} has no driver")),
         }
     }
@@ -99,6 +103,7 @@ impl Driver {
             Driver::Snow(api) => snow(api, sql).await,
             Driver::Influx(influx) => influx.flux(sql).await,
             Driver::Influx3(client) => influx3(client, sql).await,
+            Driver::Mqtt(mqtt) => mqtt.query(sql).await,
         }
     }
 
@@ -112,6 +117,7 @@ impl Driver {
             Driver::Neo(_) => "call db.labels()",
             Driver::Snow(_) => "show tables",
             Driver::Influx(influx) => return influx.tables().await,
+            Driver::Mqtt(mqtt) => return Ok(mqtt.tables()),
             Driver::Influx3(_) => {
                 "select table_name from information_schema.tables \
                  where table_schema = 'iox' order by table_name"
@@ -128,26 +134,47 @@ impl Driver {
             .collect());
     }
 
-    pub fn rows_query(
-        &self,
-        table: &str,
-        slice: &Slice,
-        shape: &Shape,
-    ) -> Option<String> {
+    pub fn rows_query(&self, table: &str, slice: &Slice, shape: &Shape) -> Option<String> {
         match self {
             Driver::Neo(_) => Some(format!(
                 "match (n:{table}) return n skip {} limit {}",
                 slice.offset, slice.limit
             )),
             Driver::Influx(influx) => Some(influx.rows(table, slice, shape)),
+            Driver::Mqtt(_) => Some(format!("mqtt subscribe \"{}\"", table.replace('"', "\\\""))),
             _ => None,
         }
+    }
+
+    // mqtt topics appear as they are published, so the buffer reports each new
+    // one and the frontend can reload its table list instead of showing a
+    // snapshot taken at connect time
+    pub fn on_catalog_change(&self, notify: Box<dyn Fn(&str) + Send>) {
+        if let Driver::Mqtt(mqtt) = self {
+            mqtt.on_catalog_change(notify);
+        }
+    }
+
+    pub fn mqtt(&self) -> Result<&crate::engines::mqtt::Mqtt, String> {
+        return match self {
+            Driver::Mqtt(mqtt) => Ok(mqtt),
+            _ => Err("not an mqtt session".to_string()),
+        };
+    }
+
+    // a driver that buffers instead of querying answers a page itself; the
+    // rest fall through to the generated sql
+    pub async fn page(&self, table: &str, slice: &Slice) -> Option<Result<QueryResult, String>> {
+        return match self {
+            Driver::Mqtt(mqtt) => Some(mqtt.page(table, slice)),
+            _ => None,
+        };
     }
 
     // the grid ranks and pages a whole table, so a driver only says yes once it
     // pushes the sort, the filters and the offset down to the server
     pub fn sliceable(&self) -> bool {
-        return !matches!(self, Driver::Neo(_));
+        return !matches!(self, Driver::Neo(_) | Driver::Mqtt(_));
     }
 
     pub async fn columns(&self) -> Result<Option<QueryResult>, String> {
@@ -163,6 +190,7 @@ impl Driver {
                 .await
                 .map(Some),
             Driver::Influx(influx) => influx.columns().await,
+            Driver::Mqtt(mqtt) => Ok(Some(mqtt.columns())),
             _ => Ok(None),
         };
     }
@@ -188,10 +216,7 @@ fn some(value: &str) -> Option<&str> {
     return Some(value);
 }
 
-async fn turso(
-    connection: &libsql::Connection,
-    sql: &str,
-) -> Result<QueryResult, String> {
+async fn turso(connection: &libsql::Connection, sql: &str) -> Result<QueryResult, String> {
     let mut answer = connection
         .query(sql, ())
         .await
@@ -211,15 +236,17 @@ async fn turso(
                     Ok(libsql::Value::Integer(number)) => Some(number.to_string()),
                     Ok(libsql::Value::Real(number)) => Some(number.to_string()),
                     Ok(libsql::Value::Text(text)) => Some(text),
-                    Ok(libsql::Value::Blob(bytes)) => {
-                        Some(format!("{} bytes", bytes.len()))
-                    }
+                    Ok(libsql::Value::Blob(bytes)) => Some(format!("{} bytes", bytes.len())),
                 })
                 .collect(),
         );
     }
 
-    return Ok(QueryResult { columns, rows, affected: None });
+    return Ok(QueryResult {
+        columns,
+        rows,
+        affected: None,
+    });
 }
 
 async fn click(client: &clickhouse::Client, sql: &str) -> Result<QueryResult, String> {
@@ -239,8 +266,7 @@ async fn click(client: &clickhouse::Client, sql: &str) -> Result<QueryResult, St
         });
     }
 
-    let answer: Value =
-        serde_json::from_slice(&body).map_err(|error| error.to_string())?;
+    let answer: Value = serde_json::from_slice(&body).map_err(|error| error.to_string())?;
 
     return Ok(QueryResult {
         columns: answer
@@ -289,13 +315,14 @@ async fn neo(graph: &neo4rs::Graph, cypher: &str) -> Result<QueryResult, String>
         );
     }
 
-    return Ok(QueryResult { columns, rows, affected: None });
+    return Ok(QueryResult {
+        columns,
+        rows,
+        affected: None,
+    });
 }
 
-async fn snow(
-    api: &snowflake_api::SnowflakeApi,
-    sql: &str,
-) -> Result<QueryResult, String> {
+async fn snow(api: &snowflake_api::SnowflakeApi, sql: &str) -> Result<QueryResult, String> {
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
 
     let answer = api.exec(sql).await.map_err(|error| error.to_string())?;
@@ -357,13 +384,14 @@ async fn snow(
         }
     }
 
-    return Ok(QueryResult { columns, rows, affected: None });
+    return Ok(QueryResult {
+        columns,
+        rows,
+        affected: None,
+    });
 }
 
-async fn influx3(
-    client: &influxdb3_client::Client,
-    sql: &str,
-) -> Result<QueryResult, String> {
+async fn influx3(client: &influxdb3_client::Client, sql: &str) -> Result<QueryResult, String> {
     let answer = client.sql(sql).await.map_err(|error| error.to_string())?;
 
     let columns = answer
@@ -379,7 +407,11 @@ async fn influx3(
         .map(|row| row.values().iter().map(point).collect())
         .collect();
 
-    return Ok(QueryResult { columns, rows, affected: None });
+    return Ok(QueryResult {
+        columns,
+        rows,
+        affected: None,
+    });
 }
 
 fn point(value: &influxdb3_client::Value) -> Option<String> {
@@ -439,7 +471,11 @@ impl Influx {
             );
         }
 
-        return Ok(QueryResult { columns, rows, affected: None });
+        return Ok(QueryResult {
+            columns,
+            rows,
+            affected: None,
+        });
     }
 
     async fn buckets(&self) -> Result<Vec<TableInfo>, String> {
@@ -455,7 +491,10 @@ impl Influx {
         return Ok(listed
             .buckets
             .into_iter()
-            .map(|bucket| TableInfo { name: bucket.name, rows: 0 })
+            .map(|bucket| TableInfo {
+                name: bucket.name,
+                rows: 0,
+            })
             .collect());
     }
 
@@ -493,23 +532,13 @@ impl Influx {
         for measurement in self.measurements().await? {
             let tags = self
                 .client
-                .list_measurement_tag_keys(
-                    &self.bucket,
-                    &measurement,
-                    Some(SINCE),
-                    None,
-                )
+                .list_measurement_tag_keys(&self.bucket, &measurement, Some(SINCE), None)
                 .await
                 .map_err(refused)?;
 
             let fields = self
                 .client
-                .list_measurement_field_keys(
-                    &self.bucket,
-                    &measurement,
-                    Some(SINCE),
-                    None,
-                )
+                .list_measurement_field_keys(&self.bucket, &measurement, Some(SINCE), None)
                 .await
                 .map_err(refused)?;
 
@@ -540,11 +569,7 @@ const SINCE: &str = "0";
 
 // influx lets one name be a tag on some points and a field on others, and the
 // grid pivots them onto a single column, so the name may only be listed once
-fn shape(
-    measurement: &str,
-    tags: &[String],
-    fields: &[String],
-) -> Vec<Vec<Option<String>>> {
+fn shape(measurement: &str, tags: &[String], fields: &[String]) -> Vec<Vec<Option<String>>> {
     let mut seen = std::collections::HashSet::new();
     let mut rows = vec![described(measurement, "_time", "time", true)];
 
@@ -565,12 +590,7 @@ fn shape(
     return rows;
 }
 
-fn described(
-    table: &str,
-    column: &str,
-    sort: &str,
-    required: bool,
-) -> Vec<Option<String>> {
+fn described(table: &str, column: &str, sort: &str, required: bool) -> Vec<Option<String>> {
     return vec![
         Some(table.to_string()),
         Some(column.to_string()),
@@ -583,10 +603,7 @@ fn described(
 }
 
 fn flux_text(value: &str) -> String {
-    return format!(
-        "\"{}\"",
-        value.replace('\\', "\\\\").replace('"', "\\\"")
-    );
+    return format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
 }
 
 fn flux_value(value: &str) -> String {
@@ -617,12 +634,7 @@ fn flux_filter(filter: &Filter) -> String {
     };
 }
 
-fn flux_rows(
-    bucket: &str,
-    measurement: Option<&str>,
-    slice: &Slice,
-    shape: &Shape,
-) -> String {
+fn flux_rows(bucket: &str, measurement: Option<&str>, slice: &Slice, shape: &Shape) -> String {
     let searching = slice
         .filters
         .iter()
@@ -805,8 +817,6 @@ fn cell(value: &Value) -> Option<String> {
     };
 }
 
-
-
 #[cfg(test)]
 mod flux {
     use super::*;
@@ -817,7 +827,10 @@ mod flux {
         let slice = Slice {
             limit: 50,
             offset: 100,
-            sort: Some(Sort { column: "load".into(), descending: false }),
+            sort: Some(Sort {
+                column: "load".into(),
+                descending: false,
+            }),
             filters: vec![Filter {
                 column: "host".into(),
                 op: Op::Contains,
@@ -840,7 +853,10 @@ mod flux {
 
     #[test]
     fn browses_a_whole_bucket() {
-        let asked = Slice { limit: 10, ..Default::default() };
+        let asked = Slice {
+            limit: 10,
+            ..Default::default()
+        };
         let script = flux_rows("metrics", None, &asked, &Shape::default());
 
         assert!(!script.contains("_measurement =="));
@@ -943,9 +959,18 @@ mod live {
             })
             .collect();
 
-        assert!(of_sensor.contains(&("_time".into(), "time".into())), "{of_sensor:?}");
-        assert!(of_sensor.contains(&("house".into(), "tag".into())), "{of_sensor:?}");
-        assert!(of_sensor.contains(&("temp".into(), "field".into())), "{of_sensor:?}");
+        assert!(
+            of_sensor.contains(&("_time".into(), "time".into())),
+            "{of_sensor:?}"
+        );
+        assert!(
+            of_sensor.contains(&("house".into(), "tag".into())),
+            "{of_sensor:?}"
+        );
+        assert!(
+            of_sensor.contains(&("temp".into(), "field".into())),
+            "{of_sensor:?}"
+        );
     }
 
     #[tokio::test]
@@ -957,7 +982,10 @@ mod live {
         let ask = |limit: u32, offset: u32| Slice {
             limit,
             offset,
-            sort: Some(Sort { column: "_time".into(), descending: false }),
+            sort: Some(Sort {
+                column: "_time".into(),
+                descending: false,
+            }),
             ..Default::default()
         };
 
@@ -966,7 +994,11 @@ mod live {
             .unwrap();
 
         assert_eq!(page.rows.len(), 1);
-        assert!(page.columns.contains(&"temp".to_string()), "{:?}", page.columns);
+        assert!(
+            page.columns.contains(&"temp".to_string()),
+            "{:?}",
+            page.columns
+        );
 
         let next = crate::engines::slicing::table_rows(&session, "sensor", &ask(1, 1))
             .await
@@ -995,7 +1027,11 @@ mod live {
         let page = crate::engines::slicing::table_rows(&session, "sensor", &slice)
             .await
             .unwrap();
-        let at = page.columns.iter().position(|name| name == "house").unwrap();
+        let at = page
+            .columns
+            .iter()
+            .position(|name| name == "house")
+            .unwrap();
 
         assert!(!page.rows.is_empty());
         assert!(page.rows.iter().all(|row| row[at].as_deref() == Some("b")));

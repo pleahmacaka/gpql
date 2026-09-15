@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "gpql main window",
   "windows": [
-    "main"
+    "main",
+    "debug"
   ],
   "permissions": [
     "core:default",
@@ -24,6 +25,7 @@
       ]
     },
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "mcp-bridge:default"
   ]
 }
