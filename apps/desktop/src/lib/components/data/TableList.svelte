@@ -9,13 +9,16 @@
   import { workspace } from "$lib/session/workspace.svelte"
 
   import ObjectList from "./ObjectList.svelte"
+  import TopicTree from "./TopicTree.svelte"
   import type { ExportFormat } from "$lib/types"
 
   let query = $state("")
   let panel = $state<"tables" | "objects">("tables")
 
+  let mqtt = $derived(workspace.session?.kind === "mqtt")
+
   const PANELS = [
-    { id: "tables" as const, label: m.panel_tables },
+    { id: "tables" as const, label: () => workspace.nouns.panel() },
     { id: "objects" as const, label: m.panel_objects },
   ]
   let scroller = $state<HTMLDivElement | null>(null)
@@ -158,10 +161,10 @@
   // the table total says nothing about a filtered set, so do not pair them
   let counter = $derived(
     filtered
-      ? m.rows_filtered({ loaded })
+      ? workspace.nouns.rowsFiltered(loaded)
       : workspace.browse.end
-        ? m.rows_all({ loaded })
-        : m.rows_loaded({ loaded, total }),
+        ? workspace.nouns.rowsAll(loaded)
+        : workspace.nouns.rowsLoaded(loaded, total),
   )
 </script>
 
@@ -191,12 +194,12 @@
       />
 
       <span class="shrink-0 pr-2 text-xs text-base-content/45">
-        {m.tables_count({ count: workspace.tables.length })}
+        {workspace.nouns.count(workspace.tables.length)}
       </span>
     </div>
   {:else}
     <h2 class="px-4 pt-2 pb-1 text-xs text-base-content/45">
-      {m.tables_count({ count: workspace.tables.length })}
+      {workspace.nouns.count(workspace.tables.length)}
     </h2>
   {/if}
 
@@ -220,18 +223,27 @@
   <div class="px-2 pb-1">
     <input
       bind:value={query}
-      placeholder={m.search_tables()}
+      placeholder={workspace.nouns.search()}
       class="w-full rounded-field bg-base-200 px-2 py-1 text-xs outline-none
         select-text placeholder:text-base-content/30"
     />
   </div>
 
   {#if panel === "objects"}
-    <div class="flex-1 overflow-y-auto pb-2">
+    <div
+      class="flex-1 overflow-y-auto pb-2"
+      style:scrollbar-gutter="stable"
+    >
       <ObjectList {query} />
     </div>
+  {:else if mqtt}
+    <TopicTree {query} onexport={shipOut} />
   {:else}
-  <div bind:this={scroller} class="flex-1 scroll-smooth overflow-y-auto px-2">
+  <div
+    bind:this={scroller}
+    class="flex-1 scroll-smooth overflow-y-auto px-2"
+    style:scrollbar-gutter="stable"
+  >
     <div class="relative" style:height="{$rows.getTotalSize()}px">
       {#each $rows.getVirtualItems() as row (row.key)}
         {@const table = shown[row.index]}
@@ -282,7 +294,8 @@
   </div>
   {/if}
 
-  <p class="px-4 py-3 text-xs text-base-content/40">
+  <p class="flex h-10 shrink-0 items-center truncate px-4 text-xs
+      text-base-content/40">
     {panel === "objects" ? m.objects_count({ count: workspace.objects.length }) : counter}
   </p>
 </aside>

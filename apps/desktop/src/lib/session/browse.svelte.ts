@@ -28,6 +28,7 @@ export class Browse {
 
   private host: BrowseHost
   private run = 0
+  private columns: string[] = []
 
   constructor(host: BrowseHost) {
     this.host = host
@@ -69,6 +70,7 @@ export class Browse {
     this.result = null
     this.sort = null
     this.filters = {}
+    this.columns = []
     this.end = false
     this.error = null
   }
@@ -77,6 +79,7 @@ export class Browse {
     if (table !== this.table) {
       this.sort = null
       this.filters = {}
+      this.columns = []
     }
 
     this.table = table
@@ -105,7 +108,14 @@ export class Browse {
         return
       }
 
-      this.result = page
+      if (page.columns.length > 0) {
+        this.columns = page.columns
+      }
+
+      this.result =
+        page.columns.length === 0 && this.columns.length > 0
+          ? { ...page, columns: this.columns }
+          : page
       this.end = page.rows.length < this.host.pageSize()
 
       if (this.end && this.untouched) {

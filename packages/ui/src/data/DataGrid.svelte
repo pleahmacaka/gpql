@@ -1,6 +1,8 @@
 <script lang="ts">
   import { createVirtualizer } from "@tanstack/svelte-virtual"
+  import { flip } from "svelte/animate"
   import { untrack } from "svelte"
+  import { fade, scale, slide } from "svelte/transition"
 
   import Dropdown from "../controls/Dropdown.svelte"
   import { drag } from "../controls/drag"
@@ -8,6 +10,7 @@
   import { tooltip } from "../controls/tooltip"
   import { Icon } from "../icons"
   import { rem } from "../controls/rem"
+  import { calm, pop, veil } from "../motion"
 
   export type CellEdit = {
     keys: Record<string, string | null>
@@ -105,8 +108,6 @@
     value: labels.value ?? "value",
     loading: labels.loading ?? "reading rows",
   })
-
-  const DIRECTIONS = ["asc", "desc"] as const
 
   const FILTER_DELAY = 250
 
@@ -889,14 +890,17 @@
   }
 </script>
 
-<div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
+<div in:fade={veil()} class="relative flex min-h-0 min-w-0 flex-1 flex-col">
   {#if active.length > 0}
     <div
+      transition:scale|local={pop()}
       class="absolute bottom-3 left-1/2 z-30 flex max-w-full -translate-x-1/2
         flex-wrap items-center gap-1 rounded-field floating px-2 py-1 lift"
     >
       {#each active as [name, filter] (name)}
         <span
+          animate:flip={{ duration: calm() ? 0 : 150 }}
+          transition:scale|local={pop()}
           class="flex items-center gap-1 rounded-selector bg-primary/10 pr-1
             pl-2 text-xs text-primary"
         >
@@ -950,6 +954,7 @@
   oncontextmenu={event => event.preventDefault()}
   class="relative min-h-0 flex-1 overflow-auto outline-none
     select-none"
+  style:scrollbar-gutter="stable"
 >
   <div
     class="sticky top-0 z-20 floating"
@@ -1028,18 +1033,16 @@
         .getVirtualItems()
         .find(column => columns[column.index] === openFilter)}
       {@const current = filters[openFilter] ?? { op: "contains", value: "" }}
-      {@const target = openFilter}
 
       {#if anchor}
         <div
-          class="absolute z-30 w-72 rounded-box floating p-3 lift"
+          transition:scale|local={pop()}
+          class="absolute z-30 w-56 rounded-box floating p-2 text-xs lift"
           style:left="{Math.max(anchor.start - 8, 0)}px"
           style:top="2.25rem"
         >
-          <div class="flex items-center gap-2 pb-2">
-            <Icon icon="lucide:filter" class="size-4 text-base-content/40" />
-
-            <span class="min-w-0 flex-1 truncate text-sm font-medium">
+          <div class="flex items-center gap-1 py-1">
+            <span class="min-w-0 flex-1 truncate font-medium">
               {openFilter}
             </span>
 
@@ -1050,7 +1053,7 @@
               class="rounded-selector p-1 text-base-content/35
                 hover:text-base-content"
             >
-              <Icon icon="lucide:x" class="size-4" />
+              <Icon icon="lucide:x" class="size-3" />
             </button>
           </div>
 
@@ -1059,12 +1062,13 @@
               focus-within:ring-1 focus-within:ring-primary/40"
           >
             <div
-              class="flex shrink-0 items-center py-1 pl-1 {needsValue(current.op)
-                ? 'w-28 border-r border-base-content/8'
+              class="flex shrink-0 items-center pl-1 {needsValue(current.op)
+                ? 'w-24 border-r border-base-content/8'
                 : 'flex-1'}"
             >
               <Dropdown
                 wide
+                small
                 value={current.op}
                 options={OPERATORS.map(entry => ({
                   value: entry.id,
@@ -1090,47 +1094,18 @@
                   }
                 }}
                 placeholder={words.value}
-                class="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm
+                class="min-w-0 flex-1 bg-transparent px-2 py-1 text-xs
                   outline-none select-text placeholder:text-base-content/30"
               />
             {/if}
           </div>
 
-          <div class="flex items-center gap-1 pt-2">
-            <Icon
-              icon="lucide:arrow-up-down"
-              class="size-4 text-base-content/40"
-            />
-
-            {#each DIRECTIONS as dir (dir)}
-              {@const chosen =
-                sort?.column === openFilter && sort.dir === dir}
-
-              <button
-                type="button"
-                aria-pressed={chosen}
-                onclick={() => {
-                  sort = chosen ? null : { column: target, dir }
-                }}
-                class="flex items-center gap-1 rounded-selector px-2 py-1
-                  text-xs {chosen
-                  ? 'bg-primary text-primary-content'
-                  : 'bg-base-200 hover:bg-base-300'}"
-              >
-                <Icon
-                  icon={dir === "asc" ? "lucide:arrow-up" : "lucide:arrow-down"}
-                  class="size-3"
-                />
-                {dir}
-              </button>
-            {/each}
-          </div>
-
-          <div class="flex items-center justify-between pt-3">
+          <div class="flex items-center justify-between pt-2">
             <button
               type="button"
               onclick={() => dropFilter(openFilter ?? "")}
-              class="text-xs text-base-content/45 hover:text-error"
+              class="rounded-selector px-2 py-1 text-base-content/45
+                hover:text-error"
             >
               {words.clearFilters}
             </button>
@@ -1138,8 +1113,7 @@
             <button
               type="button"
               onclick={closeFilter}
-              class="rounded-field bg-primary px-3 py-1 text-xs
-                text-primary-content"
+              class="rounded-field bg-primary px-2 py-1 text-primary-content"
             >
               {words.apply}
             </button>
@@ -1242,11 +1216,13 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
+      transition:fade|local={veil()}
       onclick={() => (detail = null)}
       class="absolute inset-0 z-50 grid place-items-center bg-base-300/45 p-6"
     >
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
+        transition:scale|local={pop()}
         onclick={event => event.stopPropagation()}
         class="flex max-h-full w-full max-w-2xl flex-col rounded-box floating lift"
       >
@@ -1283,6 +1259,7 @@
 
   {#if busy || paging}
     <div
+      transition:fade|local={veil()}
       class="pointer-events-none absolute bottom-3 left-3 z-30 flex
         items-center gap-2 rounded-field floating px-2 py-1 text-xs
         text-base-content/60 lift"
@@ -1295,6 +1272,7 @@
   {#if roams}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
+      transition:fade|local={veil()}
       onpointerdown={roam}
       class="absolute right-3 bottom-3 z-30 h-20 w-32 cursor-crosshair
         overflow-hidden rounded-field floating lift"
@@ -1318,6 +1296,7 @@
 
   {#if dirty > 0}
     <div
+      transition:slide|local={{ duration: calm() ? 0 : 140 }}
       class="flex items-center gap-3 border-t border-base-content/8 px-4 py-2
         text-sm"
     >
@@ -1347,6 +1326,11 @@
       </button>
     </div>
   {:else if editable && keyColumns.length === 0}
-    <p class="px-4 py-2 text-xs text-base-content/40">{words.noKey}</p>
+    <p
+      transition:slide|local={{ duration: calm() ? 0 : 140 }}
+      class="px-4 py-2 text-xs text-base-content/40"
+    >
+      {words.noKey}
+    </p>
   {/if}
 </div>

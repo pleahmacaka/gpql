@@ -7,7 +7,6 @@
 
   import ChatSurface from "$lib/components/agent/ChatSurface.svelte"
   import DataTab from "$lib/components/data/DataTab.svelte"
-  import DdlDialog from "$lib/components/data/DdlDialog.svelte"
   import WritePreview from "$lib/components/data/WritePreview.svelte"
   import ConnectPanel from "$lib/components/session/ConnectPanel.svelte"
   import SessionMenu from "$lib/components/session/SessionMenu.svelte"
@@ -76,6 +75,7 @@
     settingsOpen = false
     paletteOpen = false
     workspace.finding = false
+    workspace.ddl = null
     workspace.chat.dock = "off"
   }
 
@@ -199,7 +199,6 @@
   {/if}
 
   <WritePreview />
-  <DdlDialog />
 
   {#if workspace.notice}
     <button

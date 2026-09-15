@@ -7,6 +7,7 @@ import type {
   DbObject,
   Provider,
   SessionHandle,
+  Subscription,
   TableInfo,
   TableSchema,
 } from "$lib/types"
@@ -37,6 +38,9 @@ export class Connection {
   schemaPicked = $state("")
   favorites = $state<string[]>([])
 
+  subs = $state<Subscription[]>([])
+  draft = $state({ topic: "", payload: "", qos: 1, retain: false })
+
   browse: Browse
   query: Query
   writes: Writes
@@ -63,6 +67,7 @@ export class Connection {
 
         return this.schema
       },
+      catalogChanged: () => this.refreshSoon(),
     })
 
     this.writes = new Writes({
@@ -147,6 +152,34 @@ export class Connection {
     }
   }
 
+  private catalogTimer: ReturnType<typeof setTimeout> | undefined
+  private catalogTopics = new Set<string>()
+
+  // mqtt topics can appear any time, so the backend signals a fresh one and
+  // only the list is pulled again rather than the whole connect sequence
+  refreshSoon(topic?: string) {
+    if (topic) {
+      this.catalogTopics.add(topic)
+    }
+
+    clearTimeout(this.catalogTimer)
+    this.catalogTimer = setTimeout(() => {
+      const arrived = this.catalogTopics
+      this.catalogTopics = new Set()
+
+      void this.refreshTables()
+
+      if (this.browse.table && arrived.has(this.browse.table)) {
+        void this.browse.reload()
+      }
+    }, 300)
+  }
+
+  async refreshTables() {
+    this.tables = await api.run(api.tables(this.id))
+    this.objects = await api.run(api.objects(this.id))
+  }
+
   async loadTables() {
     this.tables = await api.run(api.tables(this.id))
     this.schemaNames = await api.run(api.schemas(this.id))
@@ -159,7 +192,12 @@ export class Connection {
         ""
     }
 
-    await this.loadFavorites()
+    await Promise.all([
+      this.loadFavorites(),
+      this.loadSubs(),
+      this.query.reload(),
+      this.query.reloadHistory(),
+    ])
 
     const first = this.tables[0]
 
@@ -195,6 +233,37 @@ export class Connection {
   async select(table: string) {
     await this.browse.open(table)
     await this.loadSchema()
+  }
+
+  async loadSubs() {
+    if (this.handle.kind !== "mqtt") {
+      return
+    }
+
+    this.subs = await api.run(api.mqttSubscriptions(this.id))
+  }
+
+  async mqttSubscribe(filter: string, qos: number) {
+    await api.run(api.mqttSubscribe(this.id, filter, qos))
+    await this.loadSubs()
+  }
+
+  async mqttUnsubscribe(filter: string) {
+    await api.run(api.mqttUnsubscribe(this.id, filter))
+    await this.loadSubs()
+  }
+
+  async mqttClear(topic: string) {
+    await api.run(api.mqttClear(this.id, topic))
+  }
+
+  async mqttPublish(
+    topic: string,
+    payload: string,
+    qos: number,
+    retain: boolean,
+  ) {
+    await api.run(api.mqttPublish(this.id, topic, payload, qos, retain))
   }
 
   async useSchema(name: string) {

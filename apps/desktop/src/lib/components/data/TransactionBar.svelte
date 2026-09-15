@@ -11,7 +11,7 @@
 
 {#if writes.open}
   <div
-    transition:fade={veil()}
+    transition:fade|local={veil()}
     class="flex items-center gap-2 rounded-field bg-warning/15 px-3 py-2
       text-xs text-warning"
   >

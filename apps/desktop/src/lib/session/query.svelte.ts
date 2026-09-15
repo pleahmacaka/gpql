@@ -19,6 +19,7 @@ export type QueryHost = {
   dialect: () => string
   provider: () => Provider | null
   schema: () => Promise<TableSchema[]>
+  catalogChanged: () => void
 }
 
 function firstLine(sql: string) {
@@ -106,6 +107,11 @@ export class Query {
 
       this.result = await api.run(api.runQuery(session.id, sql))
       this.ran = true
+
+      if (/\b(create|drop|alter|truncate|rename)\b/i.test(sql)) {
+        this.host.catalogChanged()
+      }
+
       await this.note(sql, session.label, true, Date.now() - started)
     } catch (failure) {
       this.error = friendly(String(failure))

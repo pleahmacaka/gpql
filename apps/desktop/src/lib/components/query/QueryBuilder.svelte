@@ -182,7 +182,10 @@
 
       {@render search(m.builder_find_table(), findTable, v => (findTable = v))}
 
-      <div class="flex-1 overflow-y-auto px-2 pb-2">
+      <div
+        class="flex-1 overflow-y-auto px-2 pb-2"
+        style:scrollbar-gutter="stable"
+      >
         {#each tables as entry (entry.name)}
           <button
             type="button"
@@ -218,7 +221,10 @@
 
       {@render search(m.builder_find_column(), findColumn, v => (findColumn = v))}
 
-      <div class="flex-1 overflow-y-auto px-2 pb-2">
+      <div
+        class="flex-1 overflow-y-auto px-2 pb-2"
+        style:scrollbar-gutter="stable"
+      >
         {#each shown as column (column.name)}
           <button
             type="button"

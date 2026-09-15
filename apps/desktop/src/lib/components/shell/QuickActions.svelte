@@ -22,6 +22,7 @@
 
   let term = $state("")
   let cursor = $state(0)
+  let inputEl: HTMLInputElement | undefined
 
   let actions = $derived.by(() => {
     const out: Action[] = []
@@ -54,12 +55,28 @@
         run: () => workspace.close(),
       })
 
+      for (const saved of workspace.query.saved) {
+        out.push({
+          id: `saved:${saved.id}`,
+          label: saved.name,
+          hint: m.hint_saved(),
+          icon: "lucide:bookmark",
+          run: () => {
+            workspace.tab = "query"
+            workspace.query.load(saved.id)
+          },
+        })
+      }
+
       for (const table of workspace.tables) {
         out.push({
           id: `table:${table.name}`,
           label: table.name,
-          hint: m.rows_count({ count: table.rows }),
-          icon: "lucide:table-2",
+          hint: workspace.nouns.row(table.rows),
+          icon:
+            workspace.session?.kind === "mqtt"
+              ? "lucide:radio"
+              : "lucide:table-2",
           run: async () => {
             workspace.tab = "data"
             await workspace.select(table.name)
@@ -90,19 +107,6 @@
         hint: entry.alias ? entry.label : entry.detail,
         icon: workspace.iconFor(entry.kind),
         run: () => workspace.resume(entry.url, entry.kind),
-      })
-    }
-
-    for (const saved of workspace.query.saved) {
-      out.push({
-        id: `saved:${saved.id}`,
-        label: saved.name,
-        hint: m.hint_saved(),
-        icon: "lucide:bookmark",
-        run: () => {
-          workspace.tab = "query"
-          workspace.query.sql = saved.sql
-        },
       })
     }
 
@@ -162,6 +166,10 @@
     cursor = 0
   })
 
+  $effect(() => {
+    inputEl?.focus()
+  })
+
   function pick(action: Action | undefined) {
     if (!action) {
       return
@@ -207,9 +215,8 @@
   <div class="flex items-center gap-2 px-4 py-3">
     <Icon icon="lucide:search" class="size-4 shrink-0 text-base-content/40" />
 
-    <!-- svelte-ignore a11y_autofocus -->
     <input
-      autofocus
+      bind:this={inputEl}
       bind:value={term}
       onkeydown={keys}
       placeholder={m.quick_placeholder()}

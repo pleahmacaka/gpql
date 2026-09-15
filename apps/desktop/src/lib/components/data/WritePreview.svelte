@@ -38,7 +38,10 @@
         {/if}
       </header>
 
-      <div class="min-h-0 flex-1 overflow-y-auto px-4">
+      <div
+        class="min-h-0 flex-1 overflow-y-auto px-4"
+        style:scrollbar-gutter="stable"
+      >
         <pre
           class="rounded-field bg-base-200 p-3 text-xs whitespace-pre-wrap
             select-text">{pending.statements.join(";\n")};</pre>

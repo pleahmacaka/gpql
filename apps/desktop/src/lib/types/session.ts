@@ -65,6 +65,11 @@ export interface SessionHandle {
   transactional: boolean
 }
 
+export interface Subscription {
+  filter: string
+  qos: number
+}
+
 export interface Probe {
   tone: "idle" | "busy" | "good" | "bad"
   text: string

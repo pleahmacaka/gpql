@@ -25,10 +25,12 @@ export interface Credential {
 }
 
 export interface Discovery {
+  kind: string
   host: string
   port: string
   user: string
   password: string
   database: string
+  detail: string
   needsLogin: boolean
 }

@@ -105,7 +105,10 @@
   </header>
 
   {#if tab === "history"}
-    <div class="flex-1 scroll-smooth overflow-y-auto px-2 pb-2">
+    <div
+      class="flex-1 scroll-smooth overflow-y-auto px-2 pb-2"
+      style:scrollbar-gutter="stable"
+    >
       {#each workspace.query.history as entry (entry.id)}
         <button
           type="button"
@@ -134,7 +137,10 @@
       {/each}
     </div>
   {:else}
-  <div class="flex-1 scroll-smooth overflow-y-auto px-2 pb-2">
+  <div
+    class="flex-1 scroll-smooth overflow-y-auto px-2 pb-2"
+    style:scrollbar-gutter="stable"
+  >
     {#each workspace.query.saved as entry (entry.id)}
       <div
         class="group flex items-center rounded-field hover:bg-base-200"

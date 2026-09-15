@@ -1,16 +1,22 @@
 import { board, rem } from "@gpql/ui"
+import { listen } from "@tauri-apps/api/event"
 import { asc, desc, eq } from "drizzle-orm"
 
 import { local } from "$lib/db/client"
 import { migrate } from "$lib/db/migrate"
 import { preference, recent, savedQuery } from "$lib/db/schema"
 import { ErdDocument } from "$lib/erd/document.svelte"
-import { getLocale, setLocale } from "$lib/paraglide/runtime"
+import {
+  getLocale,
+  type Locale,
+  setLocale,
+} from "$lib/paraglide/runtime"
 import type {
   BackendInfo,
   Credential,
   Discovery,
   Mode,
+  ObjectKind,
   Provider,
   SavedLogin,
   SessionConfig,
@@ -22,6 +28,7 @@ import { blankConfig } from "./commands"
 import { Connection, type ConnectionHost, idle } from "./connection.svelte"
 import { foldersOf } from "./connections"
 import { friendly } from "./errors"
+import { nounsFor } from "./nouns"
 
 const PAGE = 1000
 const LIMITS = [200, 500, 1000, 5000, 20000]
@@ -104,7 +111,7 @@ export class Workspace {
   connectionView = $state<"list" | "grid">("list")
   finding = $state(false)
   notice = $state("")
-  ddl = $state<{ name: string; text: string } | null>(null)
+  ddl = $state<{ name: string; kind?: ObjectKind; text: string } | null>(null)
 
   found = $state<Discovery[]>([])
   scanning = $state(false)
@@ -163,6 +170,10 @@ export class Workspace {
   // strip is the only thing that needs to know there are several
   get session() {
     return this.active?.handle ?? null
+  }
+
+  get nouns() {
+    return nounsFor(this.session?.kind ?? "")
   }
 
   get tables() {
@@ -269,6 +280,12 @@ export class Workspace {
   }
 
   async boot() {
+    listen<{ session: string; topic: string }>("catalog-changed", event => {
+      this.connections
+        .find(entry => entry.id === event.payload.session)
+        ?.refreshSoon(event.payload.topic)
+    })
+
     await migrate()
 
     const stored = await local.select().from(preference)
@@ -639,7 +656,7 @@ export class Workspace {
     )
   }
 
-  speak(next: "en" | "ko") {
+  speak(next: Locale) {
     setLocale(next, { reload: false })
     this.locale = next
   }
@@ -927,23 +944,26 @@ export class Workspace {
     await this.active?.useSchema(name)
   }
 
-  async showDdl(name: string) {
+  async showDdl(name: string, kind?: ObjectKind, detail?: string) {
     const session = this.session
 
     if (!session) {
       return
     }
 
-    this.ddl = { name, text: "" }
+    this.tab = "data"
+    this.ddl = { name, kind, text: "" }
 
     try {
-      const text = await api.run(api.tableDdl(session.id, name))
+      const text = await api.run(api.objectDdl(session.id, name, kind, detail))
 
-      if (this.ddl) {
-        this.ddl = { name, text }
+      if (this.ddl?.name === name) {
+        this.ddl = { name, kind, text }
       }
     } catch (failure) {
-      this.ddl = { name, text: friendly(String(failure)) }
+      if (this.ddl?.name === name) {
+        this.ddl = { name, kind, text: friendly(String(failure)) }
+      }
     }
   }
 
@@ -982,6 +1002,7 @@ export class Workspace {
     }
 
     this.tab = "data"
+    this.ddl = null
     await this.browse.open(table)
     await this.browse.setFilters({
       [key]: { op: "eq", value, needsValue: true },
@@ -1009,6 +1030,7 @@ export class Workspace {
   }
 
   async select(table: string) {
+    this.ddl = null
     await this.active?.select(table)
   }
 

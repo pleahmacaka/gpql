@@ -10,11 +10,14 @@
   import FindBar from "$lib/components/shell/FindBar.svelte"
   import TabLayout from "$lib/components/shell/TabLayout.svelte"
 
+  import DdlView from "./DdlView.svelte"
+  import MqttView from "./MqttView.svelte"
   import ResultGrid from "./ResultGrid.svelte"
   import TransactionBar from "./TransactionBar.svelte"
   import TableList from "./TableList.svelte"
 
   let view = $state<"table" | "chart">("table")
+  let mqtt = $derived(workspace.session?.kind === "mqtt")
   let asking = $state(false)
   let term = $state("")
   let hit = $state(0)
@@ -87,12 +90,36 @@
     <TableList />
   {/snippet}
 
-  <section class="flex min-w-0 flex-1 flex-col rounded-box bg-base-100 lift">
-    <header class="flex items-center gap-2 px-4 pt-2 pb-1">
-      <h2 class="text-sm font-medium">{workspace.browse.table ?? m.no_table()}</h2>
+  <section
+    class="relative flex min-w-0 flex-1 flex-col rounded-box bg-base-100 lift"
+  >
+    {#if workspace.ddl}
+      <div
+        transition:fade|local={veil()}
+        class="absolute inset-0 flex flex-col"
+      >
+        <DdlView />
+      </div>
+    {:else}
+    <div
+      transition:fade|local={veil()}
+      class="absolute inset-0 flex flex-col"
+    >
+    <header class="flex h-11 shrink-0 items-center gap-2 px-4">
+      <h2 class="min-w-0 truncate text-sm font-medium">
+        {workspace.browse.table ?? workspace.nouns.none()}
+      </h2>
 
-      <span class="text-xs text-base-content/45">
-        {m.columns_count({ count: workspace.browse.result?.columns.length ?? 0 })}
+      <span class="shrink-0 text-xs whitespace-nowrap text-base-content/45">
+        {#if mqtt}
+          {workspace.nouns.row(
+            workspace.tables.find(
+              topic => topic.name === workspace.browse.table,
+            )?.rows ?? 0,
+          )}
+        {:else}
+          {workspace.nouns.columns(workspace.browse.result?.columns.length ?? 0)}
+        {/if}
       </span>
 
       <span class="flex-1"></span>
@@ -109,8 +136,10 @@
         />
       {/if}
 
-      <div class="flex gap-1 self-center rounded-selector bg-base-200 p-1">
-        {#each [{ id: "table", icon: "lucide:table-2" }, { id: "chart", icon: "lucide:bar-chart-3" }] as option (option.id)}
+      <div
+        class="flex shrink-0 gap-1 self-center rounded-selector bg-base-200 p-1"
+      >
+        {#each [{ id: "table", icon: mqtt ? "lucide:rss" : "lucide:table-2" }, { id: "chart", icon: "lucide:bar-chart-3" }] as option (option.id)}
           <button
             type="button"
             aria-label={option.id}
@@ -131,8 +160,8 @@
         onclick={toggleWrites}
         aria-pressed={!workspace.readOnly}
         title={workspace.readOnly ? m.read_only() : m.writes_on()}
-        class="flex items-center gap-2 self-center rounded-selector px-2 py-1
-          text-xs transition-colors {workspace.readOnly
+        class="flex shrink-0 items-center gap-2 self-center rounded-selector
+          px-2 py-1 text-xs transition-colors {workspace.readOnly
           ? 'bg-base-200 text-base-content/55 hover:bg-base-300'
           : 'bg-warning/15 text-warning'}"
       >
@@ -144,7 +173,9 @@
       </button>
     </header>
 
-    {#if view === "chart" && workspace.browse.result}
+    {#if mqtt}
+      <MqttView {view} onblocked={() => (asking = true)} />
+    {:else if view === "chart" && workspace.browse.result}
       <Lazy
         load={() => import("@gpql/ui/data/ResultChart.svelte")}
         props={{
@@ -157,7 +188,9 @@
 
       <ResultGrid
         result={workspace.browse.result}
-        empty={workspace.browse.table ? m.no_rows() : m.pick_table()}
+        empty={workspace.browse.table
+          ? workspace.nouns.emptyRows()
+          : workspace.nouns.pick()}
         types={workspace.columnTypes}
         {spot}
         needle={workspace.finding ? term.trim().toLowerCase() : ""}
@@ -165,6 +198,8 @@
         onblocked={() => (asking = true)}
         browse={workspace.browse}
       />
+    {/if}
+    </div>
     {/if}
   </section>
 </TabLayout>

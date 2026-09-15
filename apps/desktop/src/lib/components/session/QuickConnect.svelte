@@ -19,14 +19,38 @@
     }
   })
 
+  function labelOf(entry: Discovery) {
+    return (
+      workspace.catalog.find(backend => backend.id === entry.kind)?.label ??
+      entry.kind
+    )
+  }
+
   function toConfig(entry: Discovery): SessionConfig {
-    return {
+    const config: SessionConfig = {
       ...blankConfig(),
+      kind: entry.kind,
       host: entry.host,
       port: entry.port,
       user: entry.user,
       password: entry.password,
       database: entry.database,
+    }
+
+    switch (entry.kind) {
+      case "mqtt":
+        return { ...config, database: "#" }
+      case "falkordb":
+        return { ...config, url: `redis://${entry.host}:${entry.port}` }
+      case "clickhouse":
+      case "influxdb":
+      case "influxdb2":
+      case "influxdb3":
+        return { ...config, url: `http://${entry.host}:${entry.port}` }
+      case "neo4j":
+        return { ...config, url: `neo4j://${entry.host}:${entry.port}` }
+      default:
+        return config
     }
   }
 
@@ -55,15 +79,14 @@
       {m.scan_empty()}
     </p>
   {:else}
-    {#each workspace.found as entry (entry.host + entry.port + entry.database)}
+    {#each workspace.found as entry (entry.kind + entry.host + entry.port + entry.database)}
       <ListRow
-        icon={entry.needsLogin ? "lucide:lock" : "lucide:database"}
-        title={entry.needsLogin
-          ? `postgres on ${entry.port}`
-          : entry.database}
-        detail={entry.needsLogin
-          ? m.scan_needs_login()
-          : `${entry.user}@${entry.host}:${entry.port}`}
+        icon={entry.needsLogin ? "lucide:lock" : workspace.iconFor(entry.kind)}
+        title={entry.database || `${labelOf(entry)} on ${entry.port}`}
+        detail={entry.detail ||
+          (entry.user
+            ? `${entry.user}@${entry.host}:${entry.port}`
+            : `${entry.host}:${entry.port}`)}
         trailing={entry.needsLogin ? "lucide:pencil" : "lucide:arrow-right"}
         onclick={() => pick(entry)}
       />

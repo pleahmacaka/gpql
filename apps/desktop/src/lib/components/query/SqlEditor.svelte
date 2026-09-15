@@ -2,6 +2,7 @@
   import { Effect, Fiber } from "effect"
 
   import { highlightSql, lspComplete, run } from "$lib/session/commands"
+  import { splitTokens } from "$lib/session/tokens"
   import { workspace } from "$lib/session/workspace.svelte"
   import type { Completion, SqlToken } from "$lib/types"
 
@@ -27,27 +28,7 @@
 
   let painting: Fiber.RuntimeFiber<void, never> | null = null
 
-  let pieces = $derived.by(() => {
-    const out: { text: string; kind: string }[] = []
-    let at = 0
-
-    for (const token of tokens) {
-      if (token.start < at || token.end > value.length) {
-        continue
-      }
-
-      if (token.start > at) {
-        out.push({ text: value.slice(at, token.start), kind: "" })
-      }
-
-      out.push({ text: value.slice(token.start, token.end), kind: token.kind })
-      at = token.end
-    }
-
-    out.push({ text: value.slice(at), kind: "" })
-
-    return out
-  })
+  let pieces = $derived(splitTokens(value, tokens))
 
   $effect(() => {
     const source = value
@@ -287,43 +268,6 @@
     margin: 0;
     border: 0;
     tab-size: 2;
-  }
-
-  :global(.tok-keyword),
-  :global(.tok-conditional),
-  :global(.tok-storageclass) {
-    color: var(--color-info);
-  }
-
-  :global(.tok-string) {
-    color: var(--color-secondary-content);
-  }
-
-  :global(.tok-number),
-  :global(.tok-float),
-  :global(.tok-boolean) {
-    color: var(--color-warning);
-  }
-
-  :global(.tok-function),
-  :global(.tok-type) {
-    color: var(--color-primary);
-  }
-
-  :global(.tok-comment) {
-    color: color-mix(in oklch, currentColor 45%, transparent);
-    font-style: italic;
-  }
-
-  :global(.tok-operator),
-  :global(.tok-punctuation) {
-    color: color-mix(in oklch, currentColor 60%, transparent);
-  }
-
-  :global(.tok-field),
-  :global(.tok-attribute),
-  :global(.tok-parameter),
-  :global(.tok-property) {
-    color: var(--color-accent);
+    scrollbar-gutter: stable;
   }
 </style>

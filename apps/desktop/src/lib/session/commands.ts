@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
-import { Data, Effect } from "effect"
+import { Cause, Data, Effect } from "effect"
 
 import type {
   BackendInfo,
@@ -10,6 +10,7 @@ import type {
   Discovery,
   Engine,
   ExportFormat,
+  ObjectKind,
   Plan,
   Provider,
   QueryResult,
@@ -18,6 +19,7 @@ import type {
   SavedLogin,
   SessionConfig,
   SessionHandle,
+  Subscription,
   SharedErd,
   Slice,
   SqlToken,
@@ -163,8 +165,32 @@ export const runQuery = (id: string, sql: string) =>
 
 export const schema = (id: string) => call<TableSchema[]>("schema", { id })
 
-export const tableDdl = (id: string, table: string) =>
-  call<string>("table_ddl", { id, table })
+export const objectDdl = (
+  id: string,
+  name: string,
+  kind?: ObjectKind,
+  detail?: string,
+) => call<string>("object_ddl", { id, name, kind, detail })
+
+export const mqttPublish = (
+  id: string,
+  topic: string,
+  payload: string,
+  qos: number,
+  retain: boolean,
+) => call<void>("mqtt_publish", { id, topic, payload, qos, retain })
+
+export const mqttClear = (id: string, topic: string) =>
+  call<void>("mqtt_clear", { id, topic })
+
+export const mqttSubscribe = (id: string, filter: string, qos: number) =>
+  call<void>("mqtt_subscribe", { id, filter, qos })
+
+export const mqttUnsubscribe = (id: string, filter: string) =>
+  call<void>("mqtt_unsubscribe", { id, filter })
+
+export const mqttSubscriptions = (id: string) =>
+  call<Subscription[]>("mqtt_subscriptions", { id })
 
 export const explainQuery = (id: string, sql: string, analyze: boolean) =>
   call<Plan>("explain_query", { id, sql, analyze })
@@ -261,8 +287,39 @@ export const signIn = (site: string) => call<void>("sign_in", { site })
 
 export const forgetAccount = () => call<void>("forget_account")
 
+// a rejected promise hands callers the FiberFailure, whose toString dumps the
+// effect trace; unwrap the real message so the UI shows the server's words
+function reason(failure: unknown): string {
+  if (
+    failure &&
+    typeof failure === "object" &&
+    "cause" in failure &&
+    Cause.isCause(failure.cause)
+  ) {
+    const found = Cause.failureOption(failure.cause)
+
+    if (found._tag === "Some") {
+      const error = found.value
+
+      return error && typeof error === "object" && "message" in error
+        ? String(error.message)
+        : String(error)
+    }
+
+    return Cause.pretty(failure.cause)
+  }
+
+  if (failure && typeof failure === "object" && "message" in failure) {
+    return String((failure as { message: unknown }).message)
+  }
+
+  return String(failure)
+}
+
 export const run = <A>(effect: Effect.Effect<A, DbError>) =>
-  Effect.runPromise(effect)
+  Effect.runPromise(effect).catch(failure => {
+    throw reason(failure)
+  })
 
 export const databases = (config: SessionConfig) =>
   call<string[]>("databases", { config })

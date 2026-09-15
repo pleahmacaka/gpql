@@ -291,6 +291,44 @@ input,
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-base-content) 7%, transparent);
 }
 
+.tok-keyword,
+.tok-conditional,
+.tok-storageclass {
+  color: var(--color-info);
+}
+
+.tok-string {
+  color: var(--color-secondary-content);
+}
+
+.tok-number,
+.tok-float,
+.tok-boolean {
+  color: var(--color-warning);
+}
+
+.tok-function,
+.tok-type {
+  color: var(--color-primary);
+}
+
+.tok-comment {
+  color: color-mix(in oklch, currentColor 45%, transparent);
+  font-style: italic;
+}
+
+.tok-operator,
+.tok-punctuation {
+  color: color-mix(in oklch, currentColor 60%, transparent);
+}
+
+.tok-field,
+.tok-attribute,
+.tok-parameter,
+.tok-property {
+  color: var(--color-accent);
+}
+
 /* lucide ships every icon as an outline with fill:none on the path, so a solid
    state has to reach past the svg element itself */
 .solid,

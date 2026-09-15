@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { DataGrid } from "@gpql/ui"
+  import { fade } from "svelte/transition"
+
+  import { DataGrid, veil } from "@gpql/ui"
 
   import * as m from "$lib/paraglide/messages"
   import { workspace } from "$lib/session/workspace.svelte"
@@ -36,8 +38,10 @@
 </script>
 
 {#if !result || result.columns.length === 0}
-  <p class="px-4 py-3 text-sm text-base-content/40">
-    {result?.affected != null ? `${result.affected} rows touched` : empty}
+  <p in:fade={veil()} class="px-4 py-3 text-sm text-base-content/40">
+    {result?.affected != null
+      ? `${result.affected} rows touched`
+      : (browse?.error ?? empty)}
   </p>
 {:else}
   <DataGrid

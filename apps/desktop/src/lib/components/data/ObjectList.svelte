@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Icon, menu } from "@gpql/ui"
+  import { slide } from "svelte/transition"
+
+  import { Icon, calm, menu } from "@gpql/ui"
 
   import * as m from "$lib/paraglide/messages"
   import { workspace } from "$lib/session/workspace.svelte"
@@ -60,6 +62,7 @@
 
   async function show(entry: DbObject) {
     if (!READABLE.includes(entry.kind)) {
+      await workspace.showDdl(entry.name, entry.kind, entry.detail)
       return
     }
 
@@ -79,13 +82,13 @@
                 await workspace.select(entry.name)
               },
             },
-            {
-              label: m.menu_ddl(),
-              icon: "lucide:file-code-2",
-              run: () => workspace.showDdl(entry.name),
-            },
           ]
         : []),
+      {
+        label: m.menu_ddl(),
+        icon: "lucide:file-code-2",
+        run: () => workspace.showDdl(entry.name, entry.kind, entry.detail),
+      },
       {
         label: m.menu_copy_name(),
         icon: "lucide:copy",
@@ -114,6 +117,7 @@
   </button>
 
   {#if !shut}
+    <div transition:slide|local={{ duration: calm() ? 0 : 150 }}>
     {#each entries as entry (entry.kind + entry.name)}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div oncontextmenu={event => openMenu(event, entry)}>
@@ -121,12 +125,14 @@
           type="button"
           onclick={() => show(entry)}
           ondblclick={() =>
-            entry.kind === "view" ? workspace.showDdl(entry.name) : undefined}
-          aria-pressed={workspace.browse.table === entry.name}
+            entry.kind === "view"
+              ? workspace.showDdl(entry.name, entry.kind, entry.detail)
+              : undefined}
+          aria-pressed={workspace.browse.table === entry.name ||
+            workspace.ddl?.name === entry.name}
           class="flex w-full items-center gap-2 rounded-field px-3 py-1
-            text-left {READABLE.includes(entry.kind)
-            ? 'hover:bg-base-200'
-            : 'cursor-default'} {workspace.browse.table === entry.name
+            text-left hover:bg-base-200 {workspace.browse.table ===
+            entry.name || workspace.ddl?.name === entry.name
             ? 'bg-primary/10 text-primary'
             : ''}"
         >
@@ -147,6 +153,7 @@
         </button>
       </div>
     {/each}
+    </div>
   {/if}
 {/each}
 

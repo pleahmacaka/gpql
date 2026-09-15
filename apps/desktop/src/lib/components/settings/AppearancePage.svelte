@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
-  import { locales } from "$lib/paraglide/runtime"
+  import { locales, type Locale } from "$lib/paraglide/runtime"
 
   import { Dropdown, OptionRow, SettingRow } from "@gpql/ui"
   import { type Scheme, schemes, workspace } from "$lib/session/workspace.svelte"
@@ -12,10 +12,17 @@
         ? m.theme_light()
         : m.theme_dark()
 
+  const names: Record<string, string> = {
+    en: "English",
+    ko: "한국어",
+    ja: "日本語",
+    zh: "中文",
+  }
+
   let languages = $derived(
     locales.map(locale => ({
       value: locale,
-      label: locale === "ko" ? "한국어" : "English",
+      label: names[locale] ?? locale,
     })),
   )
 
@@ -30,7 +37,7 @@
   <Dropdown
     options={languages}
     value={workspace.locale}
-    onpick={next => workspace.speak(next as "en" | "ko")}
+    onpick={next => workspace.speak(next as Locale)}
   />
 </div>
 

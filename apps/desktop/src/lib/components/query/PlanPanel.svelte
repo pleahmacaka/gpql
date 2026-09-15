@@ -78,7 +78,10 @@
     </div>
   {/if}
 
-  <div class="min-h-0 flex-1 overflow-auto px-4 pb-3 select-text">
+  <div
+    class="min-h-0 flex-1 overflow-auto px-4 pb-3 select-text"
+    style:scrollbar-gutter="stable"
+  >
     {#if query.plan?.tree}
       {#await import("./PlanTree.svelte") then loaded}
         <loaded.default node={query.plan.tree} {slowest} />

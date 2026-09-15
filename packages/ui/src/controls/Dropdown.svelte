@@ -6,6 +6,7 @@
     value: Value
     onpick: (value: Value) => void
     wide?: boolean
+    small?: boolean
     search?: string
     empty?: string
   }
@@ -15,6 +16,7 @@
     value,
     onpick,
     wide = false,
+    small = false,
     search = "",
     empty = "no match",
   }: Props = $props()
@@ -86,14 +88,17 @@
 >
   <summary
     class="flex cursor-pointer list-none items-center gap-2 rounded-field
-      text-sm marker:content-none
+      marker:content-none {small ? 'text-xs' : 'text-sm'}
       {wide ? 'w-full py-1' : 'px-2 py-1 hover:bg-base-300'}"
   >
     <span class="{wide ? 'flex-1' : ''} truncate">
       {current?.label ?? value}
     </span>
 
-    <Icon icon="lucide:chevron-down" class="size-4 text-base-content/40" />
+    <Icon
+      icon="lucide:chevron-down"
+      class="{small ? 'size-3' : 'size-4'} text-base-content/40"
+    />
   </summary>
 
   <div
