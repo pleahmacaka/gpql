@@ -372,7 +372,132 @@ export const engines = [
     note: "http api",
     wip: true,
   },
+  {
+    name: "MQTT",
+    icon: "simple-icons:mqtt",
+    note: "rumqttc",
+    wip: true,
+  },
 ]
+
+export const mqttSubs = [
+  { filter: "#", qos: 1 },
+  { filter: "sensors/#", qos: 1 },
+]
+
+export const mqttTopics = [
+  { label: "$SYS", path: "$SYS", depth: 0, folder: true, inside: 2, count: 0 },
+  {
+    label: "broker",
+    path: "$SYS/broker",
+    depth: 1,
+    folder: false,
+    inside: 0,
+    count: 12,
+  },
+  {
+    label: "clients",
+    path: "$SYS/clients",
+    depth: 1,
+    folder: false,
+    inside: 0,
+    count: 7,
+  },
+  {
+    label: "alerts",
+    path: "alerts",
+    depth: 0,
+    folder: true,
+    inside: 1,
+    count: 0,
+  },
+  {
+    label: "door",
+    path: "alerts/door",
+    depth: 1,
+    folder: false,
+    inside: 0,
+    count: 3,
+  },
+  {
+    label: "sensors",
+    path: "sensors",
+    depth: 0,
+    folder: true,
+    inside: 3,
+    count: 0,
+  },
+  {
+    label: "humidity",
+    path: "sensors/humidity",
+    depth: 1,
+    folder: false,
+    inside: 0,
+    count: 41,
+  },
+  {
+    label: "pressure",
+    path: "sensors/pressure",
+    depth: 1,
+    folder: false,
+    inside: 0,
+    count: 128,
+  },
+  {
+    label: "temperature",
+    path: "sensors/temperature",
+    depth: 1,
+    folder: false,
+    inside: 0,
+    count: 208,
+  },
+]
+
+export const mqttFeed = [
+  {
+    at: "14:22:31.204",
+    qos: "1",
+    retained: false,
+    payload: '{"temp":21.4,"unit":"C","node":"attic"}',
+  },
+  {
+    at: "14:22:30.987",
+    qos: "0",
+    retained: false,
+    payload: '{"temp":21.3,"unit":"C","node":"attic"}',
+  },
+  {
+    at: "14:22:29.551",
+    qos: "2",
+    retained: true,
+    payload: '{"temp":21.2,"unit":"C","node":"attic","meta":{"fw":"1.9.4"}}',
+  },
+  {
+    at: "14:22:28.118",
+    qos: "1",
+    retained: false,
+    payload: "21.4",
+  },
+  {
+    at: "14:22:26.842",
+    qos: "0",
+    retained: false,
+    payload: '{"temp":21.2,"unit":"C","node":"attic"}',
+  },
+  {
+    at: "14:22:24.309",
+    qos: "1",
+    retained: false,
+    payload: '{"temp":21.1,"unit":"C","node":"attic"}',
+  },
+]
+
+export const mqttPoints = Array.from({ length: 36 }, (_, index) => ({
+  at: new Date(1755144000000 + index * 30000),
+  amount:
+    Math.round((21 + Math.sin(index / 4) * 0.8 + (index % 7) * 0.05) * 100) /
+    100,
+}))
 
 export const ask = [
   { role: "you", text: "busiest channels this week" },
