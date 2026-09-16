@@ -2,6 +2,7 @@
   import * as m from "$lib/paraglide/messages"
 
   import { createVirtualizer } from "@tanstack/svelte-virtual"
+  import { open } from "@tauri-apps/plugin-dialog"
   import { untrack } from "svelte"
 
   import { Dropdown, Icon, drag, menu, rem } from "@gpql/ui"
@@ -12,10 +13,15 @@
   import TopicTree from "./TopicTree.svelte"
   import type { ExportFormat } from "$lib/types"
 
+  type Props = { onblocked?: () => void }
+
+  let { onblocked }: Props = $props()
+
   let query = $state("")
   let panel = $state<"tables" | "objects">("tables")
 
   let mqtt = $derived(workspace.session?.kind === "mqtt")
+  let s3 = $derived(workspace.session?.kind === "s3")
 
   const PANELS = [
     { id: "tables" as const, label: () => workspace.nouns.panel() },
@@ -62,6 +68,40 @@
 
 
   function openMenu(event: MouseEvent, table: string) {
+    if (s3) {
+      menu.show(event, [
+        {
+          label: workspace.favorites.includes(table)
+            ? m.menu_unfavorite()
+            : m.menu_favorite(),
+          icon: "lucide:star",
+          run: () => workspace.toggleFavorite(table),
+        },
+        {
+          label: m.s3_refresh(),
+          icon: "lucide:refresh-cw",
+          run: () => workspace.active?.s3Refresh(table),
+        },
+        {
+          label: m.s3_upload(),
+          icon: "lucide:upload",
+          run: () => uploadInto(table),
+        },
+        {
+          label: m.menu_copy_name(),
+          icon: "lucide:copy",
+          run: () => navigator.clipboard.writeText(table),
+        },
+        ...FORMATS.map(format => ({
+          label: m.menu_export_as({ format: format.toUpperCase() }),
+          icon: "lucide:download",
+          run: () => shipOut(table, format),
+        })),
+      ])
+
+      return
+    }
+
     menu.show(event, [
       {
         label: workspace.favorites.includes(table)
@@ -111,6 +151,30 @@
         run: () => shipOut(table, format),
       })),
 ])
+  }
+
+  async function uploadInto(bucket: string) {
+    if (workspace.readOnly) {
+      onblocked?.()
+
+      return
+    }
+
+    const path = await open({ multiple: false })
+    const connection = workspace.active
+
+    if (typeof path !== "string" || !connection) {
+      return
+    }
+
+    const key = path.split(/[\\/]/).pop() ?? path
+
+    try {
+      await connection.s3Upload(bucket, key, path)
+      workspace.notice = m.s3_sent({ key })
+    } catch (failure) {
+      workspace.notice = String(failure)
+    }
   }
 
   // exporting a table takes the filters the user is looking at, not the page
@@ -268,7 +332,10 @@
             aria-pressed={workspace.browse.table === table.name}
             class="flex min-w-0 flex-1 items-center gap-2 text-left"
           >
-            <Icon icon="lucide:table-2" class="size-4 shrink-0 opacity-60" />
+            <Icon
+              icon={s3 ? "lucide:package" : "lucide:table-2"}
+              class="size-4 shrink-0 opacity-60"
+            />
 
             <span class="truncate text-sm" title={table.name}>
               {table.name}

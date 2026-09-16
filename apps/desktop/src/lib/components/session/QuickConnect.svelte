@@ -42,6 +42,7 @@
         return { ...config, database: "#" }
       case "falkordb":
         return { ...config, url: `redis://${entry.host}:${entry.port}` }
+      case "s3":
       case "clickhouse":
       case "influxdb":
       case "influxdb2":

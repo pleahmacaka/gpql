@@ -3,7 +3,9 @@
 
   import { fade, scale } from "svelte/transition"
 
-  import { Icon, Lazy, pop, veil } from "@gpql/ui"
+  import { save } from "@tauri-apps/plugin-dialog"
+
+  import { Icon, Lazy, pop, veil, type MenuItem } from "@gpql/ui"
 
   import { workspace } from "$lib/session/workspace.svelte"
 
@@ -18,7 +20,9 @@
 
   let view = $state<"table" | "chart">("table")
   let mqtt = $derived(workspace.session?.kind === "mqtt")
+  let s3 = $derived(workspace.session?.kind === "s3")
   let asking = $state(false)
+  let removing = $state<{ bucket: string; key: string } | null>(null)
   let term = $state("")
   let hit = $state(0)
 
@@ -83,11 +87,93 @@
     asking = false
     await workspace.toggle("readOnly")
   }
+
+  function objectActions(row: number): MenuItem[] {
+    const bucket = workspace.browse.table
+    const key = workspace.browse.result?.rows[row]?.[0]
+
+    if (!bucket || !key) {
+      return []
+    }
+
+    return [
+      {
+        label: m.s3_download(),
+        icon: "lucide:download",
+        run: () => downloadObject(bucket, key),
+      },
+      {
+        label: m.s3_presign(),
+        icon: "lucide:link",
+        run: () => linkObject(bucket, key),
+      },
+      {
+        label: m.s3_delete(),
+        icon: "lucide:trash-2",
+        danger: true,
+        run: () => {
+          if (workspace.readOnly) {
+            asking = true
+
+            return
+          }
+
+          removing = { bucket, key }
+        },
+      },
+    ]
+  }
+
+  async function downloadObject(bucket: string, key: string) {
+    const connection = workspace.active
+    const name = key.split("/").pop() ?? key
+    const path = await save({ defaultPath: name })
+
+    if (!path || !connection) {
+      return
+    }
+
+    try {
+      await connection.s3Download(bucket, key, path)
+      workspace.notice = m.s3_saved({ path })
+    } catch (failure) {
+      workspace.notice = String(failure)
+    }
+  }
+
+  async function linkObject(bucket: string, key: string) {
+    const connection = workspace.active
+
+    if (!connection) {
+      return
+    }
+
+    try {
+      navigator.clipboard.writeText(await connection.s3Presign(bucket, key))
+    } catch (failure) {
+      workspace.notice = String(failure)
+    }
+  }
+
+  async function removeObject() {
+    const target = removing
+    removing = null
+
+    if (!target || !workspace.active) {
+      return
+    }
+
+    try {
+      await workspace.active.s3Delete(target.bucket, target.key)
+    } catch (failure) {
+      workspace.notice = String(failure)
+    }
+  }
 </script>
 
 <TabLayout>
   {#snippet aside()}
-    <TableList />
+    <TableList onblocked={() => (asking = true)} />
   {/snippet}
 
   <section
@@ -194,9 +280,10 @@
         types={workspace.columnTypes}
         {spot}
         needle={workspace.finding ? term.trim().toLowerCase() : ""}
-        editable
+        editable={!s3}
         onblocked={() => (asking = true)}
         browse={workspace.browse}
+        actions={s3 ? objectActions : undefined}
       />
     {/if}
     </div>
@@ -247,6 +334,60 @@
           text-warning-content"
       >
         {m.writes_allow()}
+      </button>
+    </div>
+  </div>
+{/if}
+
+{#if removing}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    transition:fade={veil()}
+    onclick={() => (removing = null)}
+    class="fixed inset-0 z-50 scrim"
+  ></div>
+
+  <div
+    transition:scale={pop()}
+    role="dialog"
+    aria-modal="true"
+    class="fixed inset-x-0 top-1/3 z-50 mx-auto w-96 max-w-11/12 rounded-box
+      floating p-5 lift"
+  >
+    <div class="flex items-start gap-3">
+      <Icon
+        icon="lucide:trash-2"
+        class="mt-1 size-4 shrink-0 text-error"
+      />
+
+      <div class="min-w-0">
+        <h2 class="truncate text-sm font-medium">
+          {m.s3_delete_ask({ key: removing.key })}
+        </h2>
+
+        <p class="pt-1 text-xs text-base-content/60">
+          {m.s3_delete_hint({ bucket: removing.bucket })}
+        </p>
+      </div>
+    </div>
+
+    <div class="flex gap-2 pt-5">
+      <button
+        type="button"
+        onclick={() => (removing = null)}
+        class="flex-1 rounded-field bg-base-200 py-2 text-sm
+          hover:bg-base-300"
+      >
+        {m.cancel()}
+      </button>
+
+      <button
+        type="button"
+        onclick={removeObject}
+        class="flex-1 rounded-field bg-error py-2 text-sm text-error-content"
+      >
+        {m.s3_delete()}
       </button>
     </div>
   </div>

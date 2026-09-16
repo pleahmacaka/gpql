@@ -266,6 +266,27 @@ export class Connection {
     await api.run(api.mqttPublish(this.id, topic, payload, qos, retain))
   }
 
+  async s3Presign(bucket: string, key: string) {
+    return api.run(api.s3Presign(this.id, bucket, key))
+  }
+
+  async s3Download(bucket: string, key: string, path: string) {
+    return api.run(api.s3Download(this.id, bucket, key, path))
+  }
+
+  async s3Upload(bucket: string, key: string, path: string) {
+    await api.run(api.s3Upload(this.id, bucket, key, path))
+  }
+
+  async s3Delete(bucket: string, key: string) {
+    await api.run(api.s3Delete(this.id, bucket, key))
+  }
+
+  async s3Refresh(bucket: string) {
+    await api.run(api.s3Refresh(this.id, bucket))
+    await this.refreshTables()
+  }
+
   async useSchema(name: string) {
     if (name === this.schemaPicked) {
       return

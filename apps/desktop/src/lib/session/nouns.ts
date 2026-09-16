@@ -42,6 +42,20 @@ const mqtt: Nouns = {
   emptyRows: () => m.no_messages(),
 }
 
+const s3: Nouns = {
+  count: count => m.buckets_count({ count }),
+  search: () => m.search_buckets(),
+  pick: () => m.pick_bucket(),
+  none: () => m.no_bucket(),
+  columns: count => m.fields_count({ count }),
+  panel: () => m.panel_buckets(),
+  row: count => m.objects_count({ count }),
+  rowsLoaded: (loaded, total) => m.objects_loaded({ loaded, total }),
+  rowsAll: loaded => m.objects_all({ loaded }),
+  rowsFiltered: loaded => m.objects_filtered({ loaded }),
+  emptyRows: () => m.no_objects(),
+}
+
 export function nounsFor(kind: string): Nouns {
-  return kind === "mqtt" ? mqtt : plain
+  return kind === "mqtt" ? mqtt : kind === "s3" ? s3 : plain
 }

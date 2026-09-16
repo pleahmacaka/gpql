@@ -38,6 +38,7 @@
     onfilter?: (filters: Record<string, Filter>) => void
     onmore?: () => void
     onjump?: (column: string, value: string) => void
+    actions?: (row: number) => MenuItem[]
     references?: Record<string, string>
     paging?: boolean
     more?: boolean
@@ -81,6 +82,7 @@
     onfilter,
     onmore,
     onjump,
+    actions,
     references = {},
     paging = false,
     more = false,
@@ -575,6 +577,7 @@
           openFilter = null
         },
       },
+      ...(actions?.(row) ?? []),
     ]
 
     menu.show(event, items)

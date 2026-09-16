@@ -1,7 +1,7 @@
 <script lang="ts">
   import { fade } from "svelte/transition"
 
-  import { DataGrid, veil } from "@gpql/ui"
+  import { DataGrid, veil, type MenuItem } from "@gpql/ui"
 
   import * as m from "$lib/paraglide/messages"
   import { workspace } from "$lib/session/workspace.svelte"
@@ -17,6 +17,7 @@
     needle?: string
     onblocked?: () => void
     browse?: Browse | null
+    actions?: (row: number) => MenuItem[]
   }
 
   let {
@@ -28,6 +29,7 @@
     needle = "",
     onblocked,
     browse = null,
+    actions,
   }: Props = $props()
 
   const NO_VALUE = ["isnull", "notnull"]
@@ -76,6 +78,7 @@
       : undefined}
     onmore={browse ? () => browse.more() : undefined}
     onjump={browse ? (column, value) => workspace.jumpTo(column, value) : undefined}
+    {actions}
     references={browse ? workspace.references : {}}
     more={browse ? !browse.end : false}
     paging={browse?.paging ?? false}

@@ -192,6 +192,29 @@ export const mqttUnsubscribe = (id: string, filter: string) =>
 export const mqttSubscriptions = (id: string) =>
   call<Subscription[]>("mqtt_subscriptions", { id })
 
+export const s3Presign = (id: string, bucket: string, key: string) =>
+  call<string>("s3_presign", { id, bucket, key })
+
+export const s3Download = (
+  id: string,
+  bucket: string,
+  key: string,
+  path: string,
+) => call<number>("s3_download", { id, bucket, key, path })
+
+export const s3Upload = (
+  id: string,
+  bucket: string,
+  key: string,
+  path: string,
+) => call<void>("s3_upload", { id, bucket, key, path })
+
+export const s3Delete = (id: string, bucket: string, key: string) =>
+  call<void>("s3_delete", { id, bucket, key })
+
+export const s3Refresh = (id: string, bucket: string) =>
+  call<void>("s3_refresh", { id, bucket })
+
 export const explainQuery = (id: string, sql: string, analyze: boolean) =>
   call<Plan>("explain_query", { id, sql, analyze })
 
