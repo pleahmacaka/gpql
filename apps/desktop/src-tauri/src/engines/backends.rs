@@ -131,6 +131,14 @@ const CLICKHOUSE: &[Field] = &[
     field("database", "Database", "default"),
 ];
 
+const S3_FIELDS: &[Field] = &[
+    field("url", "Endpoint", "http://127.0.0.1:9000"),
+    field("schema", "Region", "us-east-1"),
+    field("user", "Access key", ""),
+    secret("password", "Secret key"),
+    field("database", "Bucket", ""),
+];
+
 const MQTT: &[Field] = &[
     field("host", "Host", "127.0.0.1"),
     field("port", "Port", ""),
@@ -292,6 +300,16 @@ pub const CATALOG: &[Backend] = &[
         fields: REDIS_URL,
         wip: true,
         transport: Transport::Redis,
+    },
+    Backend {
+        id: "s3",
+        label: "S3",
+        dialect: "s3",
+        icon: "simple-icons:amazons3",
+        port: "",
+        fields: S3_FIELDS,
+        wip: true,
+        transport: Transport::Driver,
     },
     Backend {
         id: "mqtt",

@@ -24,6 +24,8 @@ const LOCAL_PORTS: &[(&str, u16)] = &[
     ("mysql", 3308),
     ("greptimedb", 4003),
     ("mqtt", 1883),
+    ("s3", 9000),
+    ("s3", 4566),
     ("falkordb", 6379),
     ("clickhouse", 8123),
     ("influxdb2", 8086),
@@ -289,6 +291,87 @@ async fn probe_falkordb(target: &Target) -> Vec<Discovery> {
     };
 }
 
+// an open port alone proves nothing, so the endpoint has to answer like s3:
+// its own error codes, a server banner, or localstack's health json
+async fn probe_s3(target: &Target, candidates: &[(String, String)]) -> Vec<Discovery> {
+    let base = format!("http://{}:{}", target.host, target.port);
+
+    let Ok(client) = reqwest::Client::builder().timeout(QUERY_WAIT).build() else {
+        return Vec::new();
+    };
+
+    let Ok(response) = client.get(&base).send().await else {
+        return Vec::new();
+    };
+
+    let banner = response
+        .headers()
+        .get("server")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_lowercase();
+    let body = response.text().await.unwrap_or_default();
+
+    let mut looks_s3 = banner.contains("minio")
+        || body.contains("<ListAllMyBucketsResult")
+        || (body.contains("<Error")
+            && [
+                "AccessDenied",
+                "SignatureDoesNotMatch",
+                "InvalidAccessKeyId",
+                "AccessDeniedException",
+                "AllAccessDisabled",
+            ]
+            .iter()
+            .any(|code| body.contains(code)));
+
+    if !looks_s3 {
+        if let Ok(health) = client
+            .get(format!("{base}/_localstack/health"))
+            .send()
+            .await
+        {
+            if health.status().is_success() {
+                looks_s3 = health
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .contains("\"s3\"");
+            }
+        }
+    }
+
+    if !looks_s3 {
+        return Vec::new();
+    }
+
+    let mut tries: Vec<(String, String)> = candidates.to_vec();
+    tries.push(("minioadmin".to_string(), "minioadmin".to_string()));
+    tries.push((String::new(), String::new()));
+    tries.dedup();
+
+    for (user, password) in tries {
+        let mut probe = probe_config(target, &user, &password, "", false);
+        probe.url = base.clone();
+
+        let Ok(Ok(session)) = tokio::time::timeout(OPEN_WAIT, open(&probe)).await
+        else {
+            continue;
+        };
+
+        let Ok(Ok(result)) = tokio::time::timeout(QUERY_WAIT, query(&session, "ls")).await
+        else {
+            continue;
+        };
+
+        let _ = result;
+
+        return vec![discovery(target, &user, &password, "", false)];
+    }
+
+    return vec![discovery(target, "", "", "", true)];
+}
+
 async fn probe(target: &Target, candidates: &[(String, String)]) -> Vec<Discovery> {
     return match target.kind.as_str() {
         "postgres" => {
@@ -326,6 +409,7 @@ async fn probe(target: &Target, candidates: &[(String, String)]) -> Vec<Discover
         }
         "clickhouse" => probe_clickhouse(target, candidates).await,
         "mqtt" => probe_mqtt(target).await,
+        "s3" => probe_s3(target, candidates).await,
         "falkordb" => probe_falkordb(target).await,
         "influxdb2" | "influxdb" => vec![discovery(target, "", "", "", true)],
         "neo4j" => vec![discovery(target, "neo4j", "", "", true)],
@@ -405,6 +489,18 @@ fn image_kind(image: &str) -> Option<&'static str> {
         {
             "mqtt"
         }
+        _ if [
+            "minio",
+            "localstack",
+            "rustfs",
+            "seaweedfs",
+            "garage",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix)) =>
+        {
+            "s3"
+        }
         _ => return None,
     });
 }
@@ -420,6 +516,7 @@ fn serves(kind: &str, container_port: u16) -> bool {
         "neo4j" => container_port == 7687,
         "greptimedb" => container_port == 4003,
         "mqtt" => matches!(container_port, 1883 | 8883 | 8884),
+        "s3" => matches!(container_port, 9000 | 8333 | 3900 | 4566 | 7480),
         _ => false,
     };
 }

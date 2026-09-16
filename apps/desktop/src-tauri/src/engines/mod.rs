@@ -12,5 +12,6 @@ pub mod mysql;
 pub mod objects;
 pub mod plan;
 pub mod remote;
+pub mod s3;
 pub mod slicing;
 pub mod writing;

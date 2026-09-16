@@ -134,6 +134,13 @@ impl Session {
         }
     }
 
+    pub fn s3(&self) -> Result<&crate::engines::s3::S3, String> {
+        return match &self.engine {
+            Engine::Driver(driver) => driver.s3(),
+            _ => Err("not an s3 session".to_string()),
+        };
+    }
+
     pub fn mqtt(&self) -> Result<&crate::engines::mqtt::Mqtt, String> {
         return match &self.engine {
             Engine::Driver(driver) => driver.mqtt(),
@@ -632,6 +639,10 @@ pub fn reads_only(sql: &str) -> bool {
             | "unwind"
             | "values"
             | "table"
+            | "ls"
+            | "list"
+            | "get"
+            | "presign"
     );
 }
 

@@ -482,6 +482,91 @@ async fn mqtt_unsubscribe(
 }
 
 #[tauri::command]
+async fn s3_presign(
+    id: String,
+    bucket: String,
+    key: String,
+    sessions: State<'_, Sessions>,
+) -> Result<String, String> {
+    let session = sessions.get(&id)?;
+
+    return session.s3()?.presign(&bucket, &key).await;
+}
+
+#[tauri::command]
+async fn s3_download(
+    id: String,
+    bucket: String,
+    key: String,
+    path: String,
+    sessions: State<'_, Sessions>,
+) -> Result<u64, String> {
+    let session = sessions.get(&id)?;
+
+    return session.s3()?.download(&bucket, &key, &path).await;
+}
+
+#[tauri::command]
+async fn s3_upload(
+    id: String,
+    bucket: String,
+    key: String,
+    path: String,
+    app: AppHandle,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    if session.read_only.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("this session is read only".into());
+    }
+
+    session.s3()?.upload(&bucket, &key, &path).await?;
+
+    let _ = app.emit(
+        "catalog-changed",
+        serde_json::json!({ "session": id, "topic": bucket }),
+    );
+
+    return Ok(());
+}
+
+#[tauri::command]
+async fn s3_delete(
+    id: String,
+    bucket: String,
+    key: String,
+    app: AppHandle,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    if session.read_only.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("this session is read only".into());
+    }
+
+    session.s3()?.delete(&bucket, &key).await?;
+
+    let _ = app.emit(
+        "catalog-changed",
+        serde_json::json!({ "session": id, "topic": bucket }),
+    );
+
+    return Ok(());
+}
+
+#[tauri::command]
+async fn s3_refresh(
+    id: String,
+    bucket: String,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = sessions.get(&id)?;
+
+    return session.s3()?.refresh(&bucket).await;
+}
+
+#[tauri::command]
 async fn mqtt_subscriptions(
     id: String,
     sessions: State<'_, Sessions>,
@@ -1150,6 +1235,11 @@ pub fn run() {
             mqtt_subscribe,
             mqtt_unsubscribe,
             mqtt_subscriptions,
+            s3_presign,
+            s3_download,
+            s3_upload,
+            s3_delete,
+            s3_refresh,
             explain_query,
             export_table,
             export_result,

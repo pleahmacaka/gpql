@@ -11,6 +11,7 @@ pub enum Driver {
     Influx(Influx),
     Influx3(Box<influxdb3_client::Client>),
     Mqtt(crate::engines::mqtt::Mqtt),
+    S3(crate::engines::s3::S3),
 }
 
 pub struct Influx {
@@ -91,6 +92,7 @@ impl Driver {
             "mqtt" => Ok(Driver::Mqtt(
                 crate::engines::mqtt::Mqtt::open(config).await?,
             )),
+            "s3" => Ok(Driver::S3(crate::engines::s3::S3::open(config).await?)),
             other => Err(format!("{other} has no driver")),
         }
     }
@@ -104,6 +106,7 @@ impl Driver {
             Driver::Influx(influx) => influx.flux(sql).await,
             Driver::Influx3(client) => influx3(client, sql).await,
             Driver::Mqtt(mqtt) => mqtt.query(sql).await,
+            Driver::S3(s3) => s3.query(sql).await,
         }
     }
 
@@ -118,6 +121,7 @@ impl Driver {
             Driver::Snow(_) => "show tables",
             Driver::Influx(influx) => return influx.tables().await,
             Driver::Mqtt(mqtt) => return Ok(mqtt.tables()),
+            Driver::S3(s3) => return s3.tables().await,
             Driver::Influx3(_) => {
                 "select table_name from information_schema.tables \
                  where table_schema = 'iox' order by table_name"
@@ -142,6 +146,7 @@ impl Driver {
             )),
             Driver::Influx(influx) => Some(influx.rows(table, slice, shape)),
             Driver::Mqtt(_) => Some(format!("mqtt subscribe \"{}\"", table.replace('"', "\\\""))),
+            Driver::S3(_) => Some(format!("s3 list \"{}\"", table.replace('"', "\\\""))),
             _ => None,
         }
     }
@@ -150,8 +155,10 @@ impl Driver {
     // one and the frontend can reload its table list instead of showing a
     // snapshot taken at connect time
     pub fn on_catalog_change(&self, notify: Box<dyn Fn(&str) + Send>) {
-        if let Driver::Mqtt(mqtt) = self {
-            mqtt.on_catalog_change(notify);
+        match self {
+            Driver::Mqtt(mqtt) => mqtt.on_catalog_change(notify),
+            Driver::S3(s3) => s3.on_catalog_change(notify),
+            _ => {}
         }
     }
 
@@ -162,11 +169,19 @@ impl Driver {
         };
     }
 
+    pub fn s3(&self) -> Result<&crate::engines::s3::S3, String> {
+        return match self {
+            Driver::S3(s3) => Ok(s3),
+            _ => Err("not an s3 session".to_string()),
+        };
+    }
+
     // a driver that buffers instead of querying answers a page itself; the
     // rest fall through to the generated sql
     pub async fn page(&self, table: &str, slice: &Slice) -> Option<Result<QueryResult, String>> {
         return match self {
             Driver::Mqtt(mqtt) => Some(mqtt.page(table, slice)),
+            Driver::S3(s3) => Some(s3.page(table, slice).await),
             _ => None,
         };
     }
@@ -174,7 +189,7 @@ impl Driver {
     // the grid ranks and pages a whole table, so a driver only says yes once it
     // pushes the sort, the filters and the offset down to the server
     pub fn sliceable(&self) -> bool {
-        return !matches!(self, Driver::Neo(_) | Driver::Mqtt(_));
+        return !matches!(self, Driver::Neo(_) | Driver::Mqtt(_) | Driver::S3(_));
     }
 
     pub async fn columns(&self) -> Result<Option<QueryResult>, String> {
@@ -191,6 +206,7 @@ impl Driver {
                 .map(Some),
             Driver::Influx(influx) => influx.columns().await,
             Driver::Mqtt(mqtt) => Ok(Some(mqtt.columns())),
+            Driver::S3(s3) => Ok(Some(s3.columns())),
             _ => Ok(None),
         };
     }
