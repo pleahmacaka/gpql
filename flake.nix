@@ -37,6 +37,7 @@
               clippy
               bun
               nanomq
+              rustfs
               cmake
             ];
 
