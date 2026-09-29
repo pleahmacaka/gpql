@@ -7,14 +7,26 @@ import type { Provider, TableInfo, TableSchema } from "$lib/types"
 
 import type { PilotMove } from "./pilot"
 
-export type ChatTurn = { id: string; role: "you" | "agent"; text: string }
+export type ChatMove =
+  | { kind: "query"; sql: string }
+  | { kind: "table"; table: string }
+
+export type ChatTurn = {
+  id: string
+  role: "you" | "agent"
+  text: string
+  move?: ChatMove
+}
 
 export type Branch = { at: number; threads: ChatTurn[][]; pick: number }
 
 export type Dock = "off" | "panel" | "orb"
 
+export type Side = "left" | "center" | "right"
+
 export type ChatHost = {
   provider: () => Provider | null
+  side: () => Side
   context: () => Promise<{ schema: TableSchema[]; tables: TableInfo[] }>
   steer: (move: PilotMove) => Promise<void>
 }
@@ -33,13 +45,24 @@ function read(raw: string): Stored {
   return { turns: held.turns ?? [], branch: held.branch ?? null }
 }
 
-function turn(role: ChatTurn["role"], text: string): ChatTurn {
-  return { id: crypto.randomUUID(), role, text }
+function turn(role: ChatTurn["role"], text: string, move?: ChatMove): ChatTurn {
+  return { id: crypto.randomUUID(), role, text, move }
+}
+
+function shown(move: PilotMove): ChatMove | undefined {
+  switch (move.go) {
+    case "query":
+      return { kind: "query", sql: move.sql }
+    case "data":
+    case "schema":
+      return { kind: "table", table: move.table }
+    case "chat":
+      return undefined
+  }
 }
 
 export class Chat {
   dock = $state<Dock>("off")
-  side = $state<"left" | "center" | "right">("right")
 
   turns = $state<ChatTurn[]>([])
   branch = $state<Branch | null>(null)
@@ -54,6 +77,10 @@ export class Chat {
 
   constructor(host: ChatHost) {
     this.host = host
+  }
+
+  get side() {
+    return this.host.side()
   }
 
   show(dock: Dock) {
@@ -212,7 +239,7 @@ export class Chat {
 
       await this.host.steer(move)
 
-      this.turns = [...this.turns, turn("agent", move.note)]
+      this.turns = [...this.turns, turn("agent", move.note, shown(move))]
 
       await this.keep()
       void this.entitle()

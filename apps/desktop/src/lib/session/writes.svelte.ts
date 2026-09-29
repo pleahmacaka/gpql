@@ -4,7 +4,10 @@ import * as api from "./commands"
 
 export type WritesHost = {
   session: () => SessionHandle | null
-  remember: (key: string, value: string) => Promise<void>
+  preview: () => boolean
+  setPreview: (on: boolean) => Promise<void>
+  activity: () => void
+  report: (failure: string) => void
   refresh: () => Promise<void>
 }
 
@@ -17,7 +20,6 @@ type Pending = {
 
 export class Writes {
   manual = $state(false)
-  preview = $state(true)
   open = $state(false)
   busy = $state(false)
   error = $state<string | null>(null)
@@ -34,13 +36,12 @@ export class Writes {
     return this.host.session()?.transactional ?? false
   }
 
-  load(settings: Map<string, string>) {
-    this.preview = settings.get("previewWrites") !== "off"
+  get preview() {
+    return this.host.preview()
   }
 
   async setPreview(on: boolean) {
-    this.preview = on
-    await this.host.remember("previewWrites", on ? "on" : "off")
+    await this.host.setPreview(on)
   }
 
   async setManual(on: boolean) {
@@ -50,7 +51,13 @@ export class Writes {
       return
     }
 
-    await api.run(api.setManual(session.id, on))
+    try {
+      await api.run(api.setManual(session.id, on))
+    } catch (failure) {
+      this.host.report(String(failure))
+
+      return
+    }
 
     this.manual = on
     this.open = false
@@ -74,6 +81,8 @@ export class Writes {
     if (statements.length === 0) {
       return true
     }
+
+    this.pending?.resolve(false)
 
     return new Promise<boolean>(resolve => {
       this.pending = { table, edits, statements, resolve }
@@ -105,6 +114,10 @@ export class Writes {
       const had = await api.run(api.endTransaction(session.id, commit))
 
       this.open = false
+
+      if (commit) {
+        this.host.activity()
+      }
 
       if (had) {
         await this.host.refresh()

@@ -6,14 +6,18 @@ export interface SavedLogin {
   host: string
   port: string
   user: string
-  password: string
   database: string
   path: string
   endpoint: string
-  token: string
   tls: string
   warehouse: string
   schema: string
+  hasPassword: boolean
+}
+
+export interface LoginDetails extends SavedLogin {
+  password: string
+  token: string
   tunnel: TunnelConfig
 }
 
@@ -33,4 +37,10 @@ export interface Discovery {
   database: string
   detail: string
   needsLogin: boolean
+}
+
+export interface TailnetPeer {
+  name: string
+  host: string
+  online: boolean
 }

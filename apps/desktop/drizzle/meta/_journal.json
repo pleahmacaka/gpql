@@ -43,6 +43,13 @@
       "when": 1788156181197,
       "tag": "0005_lively_ronan",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1790648568620,
+      "tag": "0006_mute_amazoness",
+      "breakpoints": true
     }
   ]
 }

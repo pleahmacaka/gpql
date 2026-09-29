@@ -94,9 +94,9 @@ test("a column becoming required counts as a change", () => {
   const before = [table("book", [column("title")])]
   const after = [table("book", [column("title", "text", { required: true })])]
 
-  expect(
-    diffSchemas(before, after)["tables"][0].changedColumns[0].now,
-  ).toContain("not null")
+  expect(diffSchemas(before, after).tables[0].changedColumns[0].now).toContain(
+    "not null",
+  )
 })
 
 test("quotes in an identifier cannot break out of the statement", () => {

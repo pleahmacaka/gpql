@@ -19,6 +19,17 @@ export type SchemaDiff = {
   sql: string[]
 }
 
+export type DraftTarget = {
+  kind?: string
+  views?: string[]
+}
+
+type Draft = {
+  quote: (name: string) => string
+  mysql: boolean
+  views: Set<string>
+}
+
 function shape(column: ColumnInfo) {
   const parts = [column.dataType]
 
@@ -37,13 +48,23 @@ function shape(column: ColumnInfo) {
   return parts.join(" ")
 }
 
-function quote(name: string) {
-  return `"${name.replaceAll('"', '""')}"`
+function draftFor(target: DraftTarget): Draft {
+  const mysql = target.kind === "mysql"
+
+  return {
+    mysql,
+    views: new Set(target.views ?? []),
+    quote: mysql
+      ? name => `\`${name.replaceAll("`", "``")}\``
+      : name => `"${name.replaceAll('"', '""')}"`,
+  }
 }
 
-function columnClause(column: ColumnInfo) {
-  return `${quote(column.name)} ${column.dataType}${
-    column.required ? " not null" : ""
+function columnClause(draft: Draft, column: ColumnInfo, nullable = false) {
+  const required = column.required && !nullable
+
+  return `${draft.quote(column.name)} ${column.dataType}${
+    required ? " not null" : ""
   }`
 }
 
@@ -81,59 +102,87 @@ function compareTable(left: TableSchema, right: TableSchema): TableDiff | null {
   }
 }
 
-// the sql is deliberately additive: new tables and columns are written out,
-// while drops and retypes are left commented because they lose data
-function statementsFor(entry: TableDiff, source: TableSchema[]) {
-  const out: string[] = []
+function addColumn(draft: Draft, table: string, column: ColumnInfo) {
+  const name = draft.quote(table)
+  const out = [
+    `alter table ${name} add column ${columnClause(draft, column, true)};`,
+  ]
 
-  if (entry.state === "added") {
-    const table = source.find(item => item.name === entry.table)
-    const columns = (table?.columns ?? []).map(columnClause)
-    const keys = (table?.columns ?? [])
-      .filter(column => column.primaryKey)
-      .map(column => quote(column.name))
-
-    if (keys.length > 0) {
-      columns.push(`primary key (${keys.join(", ")})`)
-    }
+  if (column.required) {
+    const tighten = draft.mysql
+      ? `modify column ${columnClause(draft, column)}`
+      : `alter column ${draft.quote(column.name)} set not null`
 
     out.push(
-      `create table ${quote(entry.table)} (\n  ${columns.join(",\n  ")}\n);`,
-    )
-
-    return out
-  }
-
-  if (entry.state === "dropped") {
-    out.push(`-- drop table ${quote(entry.table)}; -- removes every row`)
-
-    return out
-  }
-
-  for (const column of entry.addedColumns) {
-    out.push(
-      `alter table ${quote(entry.table)} add column ${columnClause(column)};`,
-    )
-  }
-
-  for (const column of entry.droppedColumns) {
-    out.push(
-      `-- alter table ${quote(entry.table)} drop column ${quote(column.name)}; -- loses data`,
-    )
-  }
-
-  for (const change of entry.changedColumns) {
-    out.push(
-      `-- alter table ${quote(entry.table)} alter column ${quote(change.name)} -- ${change.was} -> ${change.now}`,
+      `-- alter table ${name} ${tighten}; -- once existing rows have a value`,
     )
   }
 
   return out
 }
 
+function createTable(draft: Draft, table: string, source: TableSchema[]) {
+  const columns = source.find(item => item.name === table)?.columns ?? []
+  const clauses = columns.map(column => columnClause(draft, column))
+  const keys = columns
+    .filter(column => column.primaryKey)
+    .map(column => draft.quote(column.name))
+
+  if (keys.length > 0) {
+    clauses.push(`primary key (${keys.join(", ")})`)
+  }
+
+  return [
+    `create table ${draft.quote(table)} (\n  ${clauses.join(",\n  ")}\n);`,
+  ]
+}
+
+function viewNote(draft: Draft, entry: TableDiff) {
+  const name = draft.quote(entry.table)
+
+  if (entry.state === "dropped") {
+    return `-- drop view ${name};`
+  }
+
+  return `-- view ${name} differs; recreate it from its definition`
+}
+
+// the sql is deliberately additive: new tables and columns are written out,
+// while drops and retypes are left commented because they lose data
+function statementsFor(draft: Draft, entry: TableDiff, source: TableSchema[]) {
+  const name = draft.quote(entry.table)
+
+  if (draft.views.has(entry.table)) {
+    return [viewNote(draft, entry)]
+  }
+
+  if (entry.state === "added") {
+    return createTable(draft, entry.table, source)
+  }
+
+  if (entry.state === "dropped") {
+    return [`-- drop table ${name}; -- removes every row`]
+  }
+
+  return [
+    ...entry.addedColumns.flatMap(column =>
+      addColumn(draft, entry.table, column),
+    ),
+    ...entry.droppedColumns.map(
+      column =>
+        `-- alter table ${name} drop column ${draft.quote(column.name)}; -- loses data`,
+    ),
+    ...entry.changedColumns.map(
+      change =>
+        `-- alter table ${name} alter column ${draft.quote(change.name)} -- ${change.was} -> ${change.now}`,
+    ),
+  ]
+}
+
 export function diffSchemas(
   left: TableSchema[],
   right: TableSchema[],
+  target: DraftTarget = {},
 ): SchemaDiff {
   const before = new Map(left.map(table => [table.name, table]))
   const after = new Map(right.map(table => [table.name, table]))
@@ -176,7 +225,8 @@ export function diffSchemas(
 
   tables.sort((a, b) => a.table.localeCompare(b.table))
 
-  const sql = tables.flatMap(entry => statementsFor(entry, right))
+  const draft = draftFor(target)
+  const sql = tables.flatMap(entry => statementsFor(draft, entry, right))
 
   return { tables, sql }
 }

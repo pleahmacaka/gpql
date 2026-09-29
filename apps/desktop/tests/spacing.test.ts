@@ -9,7 +9,11 @@ const SPACING =
 
 const offGrid = new RegExp(`\\b-?(?:${SPACING})-\\d+\\.5\\b`, "g")
 
-const arbitrary = /\b(?:p|px|py|pt|pr|pb|pl|m|mx|my|gap|size|w|h)-\[/g
+const arbitrary = /\b[a-z][a-z0-9-]*-\[/g
+
+const hairline = /\b(?:[a-z]+-)+px\b/g
+
+const pixels = /\b\d+px\b/g
 
 const roots = [
   join(import.meta.dir, "..", "src"),
@@ -25,7 +29,9 @@ function sources(folder: string): string[] {
       return name === "paraglide" ? [] : sources(path)
     }
 
-    return name.endsWith(".svelte") || name.endsWith(".ts") ? [path] : []
+    return [".svelte", ".ts", ".css"].some(kind => name.endsWith(kind))
+      ? [path]
+      : []
   })
 }
 
@@ -35,38 +41,26 @@ test("there is something to check", () => {
   expect(files.length).toBeGreaterThan(50)
 })
 
+function strays(pattern: RegExp) {
+  return files.flatMap(path =>
+    [...readFileSync(path, "utf8").matchAll(pattern)].map(
+      hit => `${path}: ${hit[0]}`,
+    ),
+  )
+}
+
 test("every spacing utility sits on the four unit grid", () => {
-  const strays: string[] = []
-
-  for (const path of files) {
-    for (const hit of readFileSync(path, "utf8").matchAll(offGrid)) {
-      strays.push(`${path}: ${hit[0]}`)
-    }
-  }
-
-  expect(strays).toEqual([])
+  expect(strays(offGrid)).toEqual([])
 })
 
-test("no spacing is written as an arbitrary value", () => {
-  const strays: string[] = []
+test("no utility takes an arbitrary value", () => {
+  expect(strays(arbitrary)).toEqual([])
+})
 
-  for (const path of files) {
-    for (const hit of readFileSync(path, "utf8").matchAll(arbitrary)) {
-      strays.push(`${path}: ${hit[0]}`)
-    }
-  }
-
-  expect(strays).toEqual([])
+test("no utility is sized in single pixels", () => {
+  expect(strays(hairline)).toEqual([])
 })
 
 test("no length is spelled out in pixels", () => {
-  const strays: string[] = []
-
-  for (const path of files) {
-    for (const hit of readFileSync(path, "utf8").matchAll(/\b\d+px\b/g)) {
-      strays.push(`${path}: ${hit[0]}`)
-    }
-  }
-
-  expect(strays).toEqual([])
+  expect(strays(pixels)).toEqual([])
 })

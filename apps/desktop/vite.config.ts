@@ -9,6 +9,12 @@ import { defineConfig } from "vite"
 
 import { version } from "./package.json" with { type: "json" }
 
+const PARAGLIDE = {
+  project: "./project.inlang",
+  outdir: "./src/lib/paraglide",
+  strategy: ["localStorage", "preferredLanguage", "baseLocale"],
+} satisfies Parameters<typeof compile>[0]
+
 // the paraglide plugin only watches its project file, so message edits need a
 // nudge of their own
 function messages() {
@@ -39,11 +45,7 @@ function messages() {
           busy = true
 
           try {
-            await compile({
-              project: "./project.inlang",
-              outdir: "./src/lib/paraglide",
-              cleanOutdir: false,
-            })
+            await compile({ ...PARAGLIDE, cleanOutdir: false })
             server.hot.send({ type: "full-reload" })
           } finally {
             busy = false
@@ -70,11 +72,7 @@ export default defineConfig({
   },
   plugins: [
     messages(),
-    paraglideVitePlugin({
-      project: "./project.inlang",
-      outdir: "./src/lib/paraglide",
-      strategy: ["localStorage", "preferredLanguage", "baseLocale"],
-    }),
+    paraglideVitePlugin(PARAGLIDE),
     tailwindcss(),
     sveltekit({
       compilerOptions: {

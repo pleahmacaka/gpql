@@ -9,7 +9,9 @@ import type {
   DbObject,
   Discovery,
   Engine,
+  ErdRoom,
   ExportFormat,
+  LoginDetails,
   ObjectKind,
   Plan,
   Provider,
@@ -19,12 +21,13 @@ import type {
   SavedLogin,
   SessionConfig,
   SessionHandle,
-  Subscription,
   SharedErd,
   Slice,
   SqlToken,
+  Subscription,
   TableInfo,
   TableSchema,
+  TailnetPeer,
 } from "$lib/types"
 
 export class DbError extends Data.TaggedError("DbError")<{
@@ -70,6 +73,95 @@ export function blankConfig(kind: Engine = "postgres"): SessionConfig {
   }
 }
 
+const SECRET_PARAMS = [
+  "token",
+  "pass",
+  "pwd",
+  "secret",
+  "key",
+  "auth",
+  "sig",
+  "credential",
+]
+
+// an unencoded password may hold / ? # or @, so only a ?name= starts the query
+function queryStart(part: string) {
+  let at = part.indexOf("?")
+
+  while (at !== -1) {
+    const rest = part.slice(at + 1)
+    const equals = rest.indexOf("=")
+    const sign = rest.indexOf("@")
+
+    if (equals !== -1 && (sign === -1 || equals < sign)) {
+      return at
+    }
+
+    at = part.indexOf("?", at + 1)
+  }
+
+  return part.length
+}
+
+function withoutPasswords(text: string) {
+  return text
+    .split("://")
+    .map((part, index) => {
+      const head = part.slice(0, queryStart(part))
+      const sign = head.lastIndexOf("@")
+
+      if (index === 0 || sign === -1 || !head.slice(0, sign).includes(":")) {
+        return part
+      }
+
+      return part.slice(sign + 1)
+    })
+    .join("://")
+}
+
+function withoutSecretParams(text: string) {
+  const at = text.indexOf("?")
+
+  if (at === -1) {
+    return text
+  }
+
+  const params = new URLSearchParams(text.slice(at + 1))
+  const secret = [...params.keys()].filter(name =>
+    SECRET_PARAMS.some(word => name.toLowerCase().includes(word)),
+  )
+
+  if (secret.length === 0) {
+    return text
+  }
+
+  for (const name of secret) {
+    params.delete(name)
+  }
+
+  const rest = params.toString()
+
+  return rest === "" ? text.slice(0, at) : `${text.slice(0, at)}?${rest}`
+}
+
+export function stripSecrets(text: string) {
+  return withoutSecretParams(withoutPasswords(text))
+}
+
+export function carriesSecret(text: string) {
+  return stripSecrets(text) !== text
+}
+
+export function sameTarget(left: string, right: string) {
+  const key = (url: string) => {
+    const clean = stripSecrets(url)
+
+    return clean.slice(clean.indexOf("://") + 3)
+  }
+
+  return left === right || key(left) === key(right)
+}
+
 export function describe(config: SessionConfig) {
   if (config.path) {
     return `${config.kind}://${config.path}`
@@ -78,9 +170,11 @@ export function describe(config: SessionConfig) {
   if (config.url) {
     const bare = config.url.replace(/^https?:\/\//, "").replace(/\/+$/, "")
 
-    return config.database
-      ? `${config.kind}://${bare}/${config.database}`
-      : `${config.kind}://${bare}`
+    return stripSecrets(
+      config.database
+        ? `${config.kind}://${bare}/${config.database}`
+        : `${config.kind}://${bare}`,
+    )
   }
 
   const host = config.host || "127.0.0.1"
@@ -163,6 +257,14 @@ export const applyEdits = (
 export const runQuery = (id: string, sql: string) =>
   call<QueryResult>("run_query", { id, sql })
 
+export const cancelQuery = (sessionId: string) =>
+  call<boolean>("cancel_query", { sessionId })
+
+export const currentSchema = (id: string) =>
+  runQuery(id, "select current_schema()").pipe(
+    Effect.map(result => result.rows[0]?.[0] ?? ""),
+  )
+
 export const schema = (id: string) => call<TableSchema[]>("schema", { id })
 
 export const objectDdl = (
@@ -218,6 +320,10 @@ export const s3Refresh = (id: string, bucket: string) =>
 export const explainQuery = (id: string, sql: string, analyze: boolean) =>
   call<Plan>("explain_query", { id, sql, analyze })
 
+export const scanTailnet = () => call<Discovery[]>("scan_tailnet")
+
+export const tailnetPeers = () => call<TailnetPeer[]>("tailnet_peers")
+
 export const scanLocal = () =>
   call<Discovery[]>("scan_local").pipe(
     Effect.timeoutTo({
@@ -253,15 +359,30 @@ export const lspComplete = (
 export const setAcrylic = (on: boolean, dark: boolean) =>
   call<void>("set_acrylic", { on, dark })
 
-export const publishSchema = (site: string, name: string, sessionId: string) =>
-  call<SharedErd>("publish_schema", { site, name, sessionId })
+export const publishSchema = (
+  site: string,
+  name: string,
+  sessionId: string,
+  id: string | null,
+) => call<SharedErd>("publish_schema", { site, name, sessionId, id })
 
 export const shareErd = (site: string, id: string, open: boolean) =>
   call<boolean>("share_erd", { site, id, open })
 
+export const closeErd = (site: string, id: string) =>
+  call<void>("close_erd", { site, id })
+
+export const listErd = (site: string) =>
+  call<Omit<ErdRoom, "link">[]>("list_erd", { site })
+
 export const openLink = (url: string) => call<void>("open_link", { url })
 
 export const savedLogins = () => call<SavedLogin[]>("saved_logins")
+
+export const savedLogin = (url: string) =>
+  call<LoginDetails | null>("saved_login", { url })
+
+export const savedLoginsMoved = () => call<string | null>("saved_logins_moved")
 
 export const probeRecents = (items: { url: string; kind: string }[]) =>
   call<string[]>("probe_recents", { items })

@@ -1,12 +1,16 @@
+import { splitReference } from "@gpql/ui"
 import { and, eq } from "drizzle-orm"
-import { Chat } from "$lib/ai/chat.svelte"
+import { Chat, type Side } from "$lib/ai/chat.svelte"
 import type { PilotMove } from "$lib/ai/pilot"
 import { local } from "$lib/db/client"
-import { favorite } from "$lib/db/schema"
+import { favorite, preference, queryRun, savedQuery } from "$lib/db/schema"
 import type {
+  BackendInfo,
   DbObject,
   Provider,
+  SchemaState,
   SessionHandle,
+  SharedErd,
   Subscription,
   TableInfo,
   TableSchema,
@@ -19,24 +23,70 @@ import { Writes } from "./writes.svelte"
 
 export type ConnectionHost = {
   pageSize: () => number
-  dialect: (kind: string) => string
+  backend: (kind: string) => BackendInfo | undefined
   provider: () => Provider | null
   remember: (key: string, value: string) => Promise<void>
   steer: (connection: Connection, move: PilotMove) => Promise<void>
+  preview: () => boolean
+  setPreview: (on: boolean) => Promise<void>
+  side: () => Side
+  activity: () => void
+  report: (failure: string) => void
+}
+
+export const BLANK: SessionHandle = {
+  id: "",
+  label: "",
+  detail: "",
+  kind: "postgres",
+  readOnly: true,
+  sliceable: false,
+  transactional: false,
+}
+
+export function roomOf(value: string | undefined): SharedErd | null {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value)
+
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "id" in parsed &&
+      "link" in parsed &&
+      "open" in parsed &&
+      typeof parsed.id === "string" &&
+      typeof parsed.link === "string" &&
+      typeof parsed.open === "boolean"
+    ) {
+      return { id: parsed.id, link: parsed.link, open: parsed.open }
+    }
+  } catch {
+    return null
+  }
+
+  return null
 }
 
 // everything that belongs to one open database, so a second one can be opened
 // beside it instead of replacing it
 export class Connection {
-  handle: SessionHandle
-  origin = $state("")
+  handle = $state<SessionHandle>(BLANK)
+  origin: string
 
   tables = $state<TableInfo[]>([])
   objects = $state<DbObject[]>([])
   schema = $state<TableSchema[]>([])
+  schemaState = $state<SchemaState>("idle")
+  schemaError = $state("")
   schemaNames = $state<string[]>([])
   schemaPicked = $state("")
   favorites = $state<string[]>([])
+  shared = $state<SharedErd | null>(null)
+  described = $state(false)
 
   subs = $state<Subscription[]>([])
   draft = $state({ topic: "", payload: "", qos: 1, retain: false })
@@ -47,10 +97,16 @@ export class Connection {
   chat: Chat
 
   private host: ConnectionHost
+  private schemaLoad: Promise<void> | null = null
+  private catalogEra = 0
+  private catalogTimer: ReturnType<typeof setTimeout> | undefined
+  private catalogTopics = new Set<string>()
+  private closed = false
 
-  constructor(handle: SessionHandle, host: ConnectionHost) {
+  constructor(handle: SessionHandle, host: ConnectionHost, origin = "") {
     this.handle = handle
     this.host = host
+    this.origin = origin
 
     this.browse = new Browse({
       session: () => this.live,
@@ -60,6 +116,7 @@ export class Connection {
 
     this.query = new Query({
       session: () => this.live,
+      target: () => this.origin,
       dialect: () => this.dialect,
       provider: host.provider,
       schema: async () => {
@@ -68,11 +125,18 @@ export class Connection {
         return this.schema
       },
       catalogChanged: () => this.refreshSoon(),
+      wrote: () => {
+        this.writes.noteWrite()
+        host.activity()
+      },
     })
 
     this.writes = new Writes({
       session: () => this.live,
-      remember: host.remember,
+      preview: host.preview,
+      setPreview: host.setPreview,
+      activity: host.activity,
+      report: host.report,
       refresh: async () => {
         if (this.browse.table) {
           await this.browse.reload()
@@ -82,6 +146,7 @@ export class Connection {
 
     this.chat = new Chat({
       provider: host.provider,
+      side: host.side,
       context: async () => {
         await this.loadSchema()
 
@@ -98,19 +163,35 @@ export class Connection {
   // the placeholder connection stands in before anything is open, so it must
   // answer "not connected" rather than pretend
   private get live() {
-    return this.handle.id === "" ? null : this.handle
+    return this.handle.id === "" || this.closed ? null : this.handle
   }
 
   get label() {
     return this.handle.label
   }
 
+  private get backend() {
+    return this.host.backend(this.handle.kind)
+  }
+
   get dialect() {
-    return this.host.dialect(this.handle.kind)
+    return this.backend?.dialect ?? "sql"
+  }
+
+  get canExplain() {
+    return this.live !== null && this.backend?.explain === true
+  }
+
+  get canAnalyze() {
+    return this.canExplain && this.backend?.analyze === true
   }
 
   get writable() {
     return !this.handle.readOnly
+  }
+
+  get openTransaction() {
+    return this.writes.open
   }
 
   get keyColumns() {
@@ -131,12 +212,18 @@ export class Connection {
 
   get references() {
     const found = this.schema.find(entry => entry.name === this.browse.table)
+    const listed = new Set(this.tables.map(entry => entry.name))
+    const out: Record<string, string> = {}
 
-    return Object.fromEntries(
-      (found?.columns ?? [])
-        .filter(column => column.references)
-        .map(column => [column.name, column.references as string]),
-    )
+    for (const column of found?.columns ?? []) {
+      const target = column.references
+
+      if (target && listed.has(splitReference(target).table)) {
+        out[column.name] = target
+      }
+    }
+
+    return out
   }
 
   private noteCount(table: string, rows: number) {
@@ -152,12 +239,13 @@ export class Connection {
     }
   }
 
-  private catalogTimer: ReturnType<typeof setTimeout> | undefined
-  private catalogTopics = new Set<string>()
-
   // mqtt topics can appear any time, so the backend signals a fresh one and
   // only the list is pulled again rather than the whole connect sequence
   refreshSoon(topic?: string) {
+    if (this.closed) {
+      return
+    }
+
     if (topic) {
       this.catalogTopics.add(topic)
     }
@@ -165,8 +253,8 @@ export class Connection {
     clearTimeout(this.catalogTimer)
     this.catalogTimer = setTimeout(() => {
       const arrived = this.catalogTopics
-      this.catalogTopics = new Set()
 
+      this.catalogTopics = new Set()
       void this.refreshTables()
 
       if (this.browse.table && arrived.has(this.browse.table)) {
@@ -175,9 +263,48 @@ export class Connection {
     }, 300)
   }
 
+  // a load that started before the catalog moved must not land after it
+  private moveCatalog() {
+    this.schemaLoad = null
+
+    return ++this.catalogEra
+  }
+
   async refreshTables() {
-    this.tables = await api.run(api.tables(this.id))
-    this.objects = await api.run(api.objects(this.id))
+    if (this.closed) {
+      return
+    }
+
+    const era = this.moveCatalog()
+
+    try {
+      const [tables, objects] = await Promise.all([
+        api.run(api.tables(this.id)),
+        api.run(api.objects(this.id)),
+      ])
+
+      if (this.closed || era !== this.catalogEra) {
+        return
+      }
+
+      this.tables = tables
+      this.objects = objects
+    } catch (failure) {
+      if (era !== this.catalogEra) {
+        return
+      }
+
+      this.host.report(String(failure))
+    }
+
+    const loaded =
+      this.schemaState === "ready" || this.schemaState === "loading"
+
+    this.schemaState = "idle"
+
+    if (loaded) {
+      await this.loadSchema()
+    }
   }
 
   async loadTables() {
@@ -185,15 +312,13 @@ export class Connection {
     this.schemaNames = await api.run(api.schemas(this.id))
     this.objects = await api.run(api.objects(this.id))
 
-    if (this.schemaPicked === "") {
-      this.schemaPicked =
-        this.schemaNames.find(name => name === "public") ??
-        this.schemaNames[0] ??
-        ""
+    if (this.schemaNames.length > 0) {
+      this.schemaPicked = await this.currentSchema()
     }
 
     await Promise.all([
       this.loadFavorites(),
+      this.loadShared(),
       this.loadSubs(),
       this.query.reload(),
       this.query.reloadHistory(),
@@ -206,7 +331,13 @@ export class Connection {
     }
   }
 
-  described = $state(false)
+  private async currentSchema() {
+    try {
+      return await api.run(api.currentSchema(this.id))
+    } catch {
+      return this.schemaNames.includes("public") ? "public" : ""
+    }
+  }
 
   // the model only annotates what it is shown, and the notes stay in memory
   // rather than being written back to the database
@@ -222,12 +353,53 @@ export class Connection {
     this.described = true
   }
 
-  async loadSchema() {
-    if (this.schema.length > 0) {
-      return
+  loadSchema(force = false): Promise<void> {
+    if (this.schemaLoad) {
+      return this.schemaLoad
     }
 
-    this.schema = await api.run(api.schema(this.id))
+    if (!force && this.schemaState !== "idle") {
+      return Promise.resolve()
+    }
+
+    const load = this.fetchSchema(this.catalogEra).finally(() => {
+      if (this.schemaLoad === load) {
+        this.schemaLoad = null
+      }
+    })
+
+    this.schemaLoad = load
+
+    return load
+  }
+
+  private async fetchSchema(era: number) {
+    this.schemaState = "loading"
+    this.schemaError = ""
+
+    try {
+      const fresh = await api.run(api.schema(this.id))
+
+      if (era !== this.catalogEra) {
+        return
+      }
+
+      const notes = new Map(this.schema.map(table => [table.name, table.note]))
+
+      this.schema = fresh.map(table =>
+        notes.get(table.name)
+          ? { ...table, note: notes.get(table.name) }
+          : table,
+      )
+      this.schemaState = "ready"
+    } catch (failure) {
+      if (era !== this.catalogEra) {
+        return
+      }
+
+      this.schemaError = String(failure)
+      this.schemaState = "failed"
+    }
   }
 
   async select(table: string) {
@@ -299,17 +471,64 @@ export class Connection {
   }
 
   forgetCatalog() {
+    this.moveCatalog()
     this.described = false
     this.schema = []
+    this.schemaState = "idle"
+    this.schemaError = ""
     this.browse.reset()
     this.query.reset()
+  }
+
+  // rows saved before connections were keyed by address carry the database name
+  async adopt() {
+    if (this.origin === "" || this.label === "" || this.label === this.origin) {
+      return
+    }
+
+    const legacy = await local
+      .select()
+      .from(favorite)
+      .where(eq(favorite.target, this.label))
+
+    for (const row of legacy) {
+      await local
+        .insert(favorite)
+        .values({ target: this.origin, table: row.table })
+        .onConflictDoNothing()
+    }
+
+    await local.delete(favorite).where(eq(favorite.target, this.label))
+    await local
+      .update(queryRun)
+      .set({ target: this.origin })
+      .where(eq(queryRun.target, this.label))
+    await local
+      .update(savedQuery)
+      .set({ target: this.origin })
+      .where(eq(savedQuery.target, this.label))
+
+    const [layout] = await local
+      .select()
+      .from(preference)
+      .where(eq(preference.key, `layout:${this.label}`))
+
+    if (layout) {
+      await local
+        .insert(preference)
+        .values({ key: `layout:${this.origin}`, value: layout.value })
+        .onConflictDoNothing()
+      await local
+        .delete(preference)
+        .where(eq(preference.key, `layout:${this.label}`))
+    }
   }
 
   async loadFavorites() {
     const found = await local
       .select()
       .from(favorite)
-      .where(eq(favorite.target, this.label))
+      .where(eq(favorite.target, this.origin))
 
     this.favorites = found.map(entry => entry.table)
   }
@@ -319,7 +538,7 @@ export class Connection {
       this.favorites = this.favorites.filter(entry => entry !== name)
       await local
         .delete(favorite)
-        .where(and(eq(favorite.target, this.label), eq(favorite.table, name)))
+        .where(and(eq(favorite.target, this.origin), eq(favorite.table, name)))
 
       return
     }
@@ -327,8 +546,31 @@ export class Connection {
     this.favorites = [...this.favorites, name]
     await local
       .insert(favorite)
-      .values({ target: this.label, table: name })
+      .values({ target: this.origin, table: name })
       .onConflictDoNothing()
+  }
+
+  async loadShared() {
+    const [row] = await local
+      .select()
+      .from(preference)
+      .where(eq(preference.key, `erd:${this.origin}`))
+
+    this.shared = roomOf(row?.value)
+  }
+
+  async keepShared(room: SharedErd | null) {
+    this.shared = room
+
+    if (room) {
+      await this.host.remember(`erd:${this.origin}`, JSON.stringify(room))
+
+      return
+    }
+
+    await local
+      .delete(preference)
+      .where(eq(preference.key, `erd:${this.origin}`))
   }
 
   async applyEdits(
@@ -340,15 +582,20 @@ export class Connection {
     const table = this.browse.table
 
     if (!table || !(await this.writes.confirm(table, edits))) {
-      return
+      return false
     }
 
     await api.run(api.applyEdits(this.id, table, edits))
     this.writes.noteWrite()
+    this.host.activity()
     await this.select(table)
+
+    return true
   }
 
   async close() {
+    this.closed = true
+    clearTimeout(this.catalogTimer)
     this.writes.reset()
 
     try {
@@ -358,22 +605,3 @@ export class Connection {
     }
   }
 }
-
-export const idle = new Connection(
-  {
-    id: "",
-    label: "",
-    detail: "",
-    kind: "postgres",
-    readOnly: true,
-    sliceable: false,
-    transactional: false,
-  },
-  {
-    pageSize: () => 0,
-    dialect: () => "sql",
-    provider: () => null,
-    remember: async () => {},
-    steer: async () => {},
-  },
-)

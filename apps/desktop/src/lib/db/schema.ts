@@ -10,6 +10,7 @@ import {
 export const preference = sqliteTable("preference", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
+  updatedAt: integer("updated_at").notNull().default(0),
 })
 
 export const recent = sqliteTable(
@@ -63,4 +64,14 @@ export const queryRun = sqliteTable(
     ranAt: integer("ran_at").notNull().default(sql`(unixepoch())`),
   },
   table => [index("query_run_ran_at").on(table.ranAt)],
+)
+
+export const syncTombstone = sqliteTable(
+  "sync_tombstone",
+  {
+    kind: text("kind", { enum: ["recent", "query"] }).notNull(),
+    key: text("key").notNull(),
+    deletedAt: integer("deleted_at").notNull(),
+  },
+  entry => [primaryKey({ columns: [entry.kind, entry.key] })],
 )

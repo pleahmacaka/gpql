@@ -47,22 +47,21 @@ export class Browse {
       return { limit, offset }
     }
 
-    return {
-      limit,
-      offset,
-      sort: this.sort,
-      filters: Object.entries(this.filters)
-        .filter(([, filter]) => filter.value !== "" || !filter.needsValue)
-        .map(([column, filter]) => ({
-          column,
-          op: filter.op,
-          value: filter.value,
-        })),
-    }
+    return { limit, offset, sort: this.sort, filters: this.applied }
   }
 
   exportSlice(): Slice {
-    return { ...this.slice(0), limit: 0 }
+    return { limit: 0, offset: 0, sort: this.sort, filters: this.applied }
+  }
+
+  private get applied() {
+    return Object.entries(this.filters)
+      .filter(([, filter]) => filter.value !== "" || !filter.needsValue)
+      .map(([column, filter]) => ({
+        column,
+        op: filter.op,
+        value: filter.value,
+      }))
   }
 
   reset() {
@@ -75,11 +74,15 @@ export class Browse {
     this.error = null
   }
 
-  async open(table: string) {
+  async open(table: string, filters?: Record<string, TableFilter>) {
     if (table !== this.table) {
       this.sort = null
       this.filters = {}
       this.columns = []
+    }
+
+    if (filters) {
+      this.filters = filters
     }
 
     this.table = table
@@ -143,7 +146,15 @@ export class Browse {
     const table = this.table
     const held = this.result
 
-    if (!session || !table || !held || this.end || this.paging || this.busy) {
+    if (
+      !session ||
+      !table ||
+      !held ||
+      this.end ||
+      this.paging ||
+      this.busy ||
+      this.error
+    ) {
       return
     }
 
@@ -163,8 +174,9 @@ export class Browse {
       this.result = { ...held, rows: [...held.rows, ...page.rows] }
       this.end = page.rows.length < this.host.pageSize()
     } catch (failure) {
-      this.error = String(failure)
-      this.end = true
+      if (ticket === this.run && this.result === held) {
+        this.error = String(failure)
+      }
     } finally {
       this.paging = false
     }

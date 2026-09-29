@@ -4,6 +4,8 @@ export type Tab = "data" | "query" | "schema"
 
 export type Mode = "new" | "quick" | "recent" | "erd"
 
+export type SchemaState = "idle" | "loading" | "ready" | "failed"
+
 export interface BackendField {
   key: string
   label: string
@@ -19,12 +21,22 @@ export interface BackendInfo {
   port: string
   fields: BackendField[]
   wip: boolean
+  explain: boolean
+  analyze: boolean
 }
 
 export interface SharedErd {
   id: string
   link: string
   open: boolean
+}
+
+export interface ErdRoom {
+  id: string
+  name: string
+  open: boolean
+  createdAt: string | number | null
+  link: string
 }
 
 export interface TunnelConfig {
@@ -51,6 +63,7 @@ export interface SessionConfig {
   schema: string
   tls: string
   readOnly: boolean
+  create?: boolean
   tunnel?: TunnelConfig
   [key: string]: string | boolean | TunnelConfig | undefined
 }

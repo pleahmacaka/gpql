@@ -10,14 +10,28 @@ const files = import.meta.glob("../../../drizzle/*.sql", {
 
 const LEDGER = "create table if not exists _migration (name text primary key)"
 
-export async function migrate() {
-  await applySchema(LEDGER)
-
-  const applied = await invoke<string[][]>("local_query", {
+async function applied() {
+  const rows = await invoke<string[][]>("local_query", {
     sql: "select name from _migration",
     params: [],
   })
-  const done = new Set(applied.map(row => row[0]))
+
+  return new Set(rows.map(row => row[0]))
+}
+
+function atomic(name: string, statements: string) {
+  return [
+    "begin immediate;",
+    `insert into _migration (name) values ('${name.replaceAll("'", "''")}');`,
+    statements.replaceAll("--> statement-breakpoint", ""),
+    "commit;",
+  ].join("\n")
+}
+
+export async function migrate() {
+  await applySchema(LEDGER)
+
+  const done = await applied()
 
   for (const path of Object.keys(files).sort()) {
     const name = path.split("/").pop() ?? path
@@ -26,10 +40,15 @@ export async function migrate() {
       continue
     }
 
-    await applySchema(files[path].replaceAll("--> statement-breakpoint", ""))
-    await invoke("local_query", {
-      sql: "insert into _migration (name) values (?)",
-      params: [name],
-    })
+    try {
+      await applySchema(atomic(name, files[path]))
+    } catch (failure) {
+      // a failed batch leaves its transaction open on the shared connection
+      await applySchema("rollback").catch(() => undefined)
+
+      if (!(await applied()).has(name)) {
+        throw failure
+      }
+    }
   }
 }
