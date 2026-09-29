@@ -16,13 +16,7 @@
       devShells = forAll (
         system:
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            config.permittedInsecurePackages = [
-              "nanomq"
-              "nanomq-0.24.11"
-            ];
-          };
+          pkgs = nixpkgs.legacyPackages.${system};
         in
         {
           default = pkgs.mkShell {
@@ -36,7 +30,7 @@
               rustfmt
               clippy
               bun
-              nanomq
+              mosquitto
               rustfs
               cmake
             ];

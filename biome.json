@@ -6,6 +6,9 @@
       "apps/*/tests/**/*.ts",
       "apps/*/*.ts",
       "*.json",
+      "packages/*/src/**/*.ts",
+      "packages/*/scripts/**/*.ts",
+      "packages/*/*.json",
       "apps/*/*.json",
       "!**/node_modules",
       "!**/.svelte-kit",
@@ -34,9 +37,6 @@
       "preset": "recommended",
       "style": {
         "useBlockStatements": "error"
-      },
-      "suspicious": {
-        "noExplicitAny": "off"
       }
     }
   },
