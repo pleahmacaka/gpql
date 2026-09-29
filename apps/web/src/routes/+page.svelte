@@ -26,7 +26,7 @@
     { href: "#details", label: "Details" },
   ]
 
-  const FACTS = ["Windows 10 and 11", "64-bit", "Setup or MSI", "17 MB"]
+  const FACTS = ["Windows 10 and 11", "64-bit", "Setup or MSI", "Tauri 2"]
 
   let rushing = false
 

@@ -155,7 +155,7 @@
       )}
       {@render tile(
         "Setup file",
-        "About 17 MB. Tauri 2, drawn with WebView2.",
+        "Tauri 2 on WebView2, no bundled browser.",
         size,
       )}
     </ul>
