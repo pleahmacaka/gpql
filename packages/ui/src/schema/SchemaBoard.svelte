@@ -1,54 +1,59 @@
 <script lang="ts">
   import {
     Background,
-    MiniMap,
+    BackgroundVariant,
     Controls,
+    type Edge,
+    MiniMap,
+    type Node,
     Panel,
     SvelteFlow,
     useSvelteFlow,
-    type Edge,
-    type Node,
   } from "@xyflow/svelte"
   import "@xyflow/svelte/dist/style.css"
 
   import { untrack } from "svelte"
-  import * as Y from "yjs"
 
-  import { menu, type MenuItem } from "../controls/menu.svelte"
-  import { board, type TableGroup } from "./board.svelte"
+  import { type MenuItem, menu } from "../controls/menu.svelte"
+  import { rem } from "../controls/rem"
   import { Icon } from "../icons"
+  import { calm, TIMING } from "../motion"
+  import type { LayoutChannel, SchemaTable } from "../types"
   import BandNode from "./BandNode.svelte"
+  import BoardTools from "./BoardTools.svelte"
+  import {
+    board,
+    distinct,
+    type Spot,
+    speak,
+    type TableGroup,
+    WORDS,
+    type Words,
+  } from "./board.svelte"
+  import { shareLayout } from "./layout"
   import LevelNode from "./LevelNode.svelte"
-  import { NODE_CENTRE, byLevel, columnOffset, toFlow } from "./levels"
+  import {
+    byLevel,
+    cardHeight,
+    columnOffset,
+    nodeCentre,
+    toFlow,
+  } from "./levels"
   import SchemaTableNode from "./SchemaTableNode.svelte"
-  import type { SchemaTable } from "../types"
 
   type Props = {
     tables: SchemaTable[]
     dark?: boolean
     keyboard?: boolean
     minimap?: boolean
-    room?: string
-    labels?: Partial<
-      Record<
-        | "auto"
-        | "picked"
-        | "group"
-        | "ungroup"
-        | "warn"
-        | "groupName"
-        | "think"
-        | "nothing"
-        | "rest"
-        | "define"
-        | "cancel",
-        string
-      >
-    >
+    scrollPan?: boolean
+    channel?: LayoutChannel
+    labels?: Partial<Words>
+    menuItems?: (table: string | null) => MenuItem[]
     onselect?: (table: string) => void
     onsuggest?: (signal: AbortSignal) => Promise<TableGroup[]> | TableGroup[]
     onlayout?: (layout: {
-      spots: Record<string, { x: number; y: number }>
+      spots: Record<string, Spot>
       groups: TableGroup[]
     }) => void
   }
@@ -57,32 +62,21 @@
     tables,
     dark = false,
     keyboard = true,
-    room = "",
-    labels = {},
     minimap = true,
+    scrollPan = true,
+    channel,
+    labels = {},
+    menuItems,
     onselect,
     onsuggest,
     onlayout,
   }: Props = $props()
 
-  let words = $derived({
-    auto: labels.auto ?? "Auto arrange",
-    picked: labels.picked ?? "Arrange picked",
-    group: labels.group ?? "Group",
-    ungroup: labels.ungroup ?? "Ungroup",
-    warn: labels.warn ?? "positions reset, groups stay. click again",
-    groupName: labels.groupName ?? "group",
-    think: labels.think ?? "Group with AI",
-    nothing: labels.nothing ?? "the model found no grouping worth keeping",
-    rest: labels.rest ?? "everything else",
-    define: labels.define ?? "Show definition",
-    cancel: labels.cancel ?? "Cancel",
-  })
+  let words = $derived<Words>({ ...WORDS, ...labels })
 
-  let armed = $state(false)
+  speak(() => words)
 
-  let shared: Y.Map<{ x: number; y: number }> | null = null
-
+  const hint = $props.id()
   const nodeTypes = { table: SchemaTableNode, level: LevelNode, band: BandNode }
   const flow = useSvelteFlow()
 
@@ -90,147 +84,208 @@
   let edges = $state.raw<Edge[]>([])
   let linked = $state.raw<Edge[]>([])
 
+  let armed = $state(false)
+  let gliding = $state(false)
+  let thinking = $state<AbortController | null>(null)
+  let notice = $state("")
+
+  let frame = $state<HTMLDivElement | null>(null)
+  let centred: string | null = null
+  let shared: ReturnType<typeof shareLayout> | null = null
+  let settle: ReturnType<typeof setTimeout> | undefined
+
   let plain = $derived($state.snapshot(tables) as SchemaTable[])
 
   let levels = $derived(byLevel(plain))
 
+  let spoken = $derived.by(() => {
+    const table = plain.find(entry => entry.name === board.table)
+    const column = table?.columns[board.column]
+
+    if (!table || !column) {
+      return table?.name ?? ""
+    }
+
+    const traits = [
+      column.dataType,
+      column.primaryKey && words.primary,
+      !column.required && !column.primaryKey && words.nullable,
+      column.references && `${words.references} ${column.references}`,
+    ]
+
+    return [`${table.name}.${column.name}`, ...traits]
+      .filter(Boolean)
+      .join(", ")
+  })
+
   $effect(() => {
     const built = toFlow(plain, board.groups, words.rest)
-    // reading the saved spots without tracking them keeps dragging from
-    // feeding back into a rebuild
     const saved = untrack(() => board.spots)
 
     nodes = built.nodes.map(node =>
       saved[node.id] ? { ...node, position: saved[node.id] } : node,
     )
     linked = built.edges
+
+    const target = untrack(() => (keyboard ? board.selected : null))
+
+    if (target) {
+      requestAnimationFrame(() => requestAnimationFrame(() => reveal(target)))
+    }
   })
 
-  // the table in hand keeps its relations bright, the rest step back
   $effect(() => {
-    const focus = board.table ?? board.selected
+    const focus = board.hover ?? board.table ?? board.selected
     const near = new Set(board.groupOf(focus ?? "")?.tables ?? [])
-    const drawn = linked.length > 0 ? linked : untrack(() => edges)
 
-    edges = drawn.map(edge => {
+    edges = linked.map(edge => {
       const mine =
-        !focus ||
         edge.source === focus ||
         edge.target === focus ||
         (near.has(edge.source) && near.has(edge.target))
+      const tone = focus === null ? "" : mine ? "edge-near" : "edge-far"
+      const hint = edge.sourceHandle === "note" ? "edge-hint" : ""
 
-      return {
-        ...edge,
-        style: mine
-          ? "stroke: color-mix(in oklch, var(--color-primary) 70%, transparent); stroke-width: 1.75"
-          : "stroke: color-mix(in oklch, currentColor 12%, transparent); stroke-width: 1",
-      }
+      return { ...edge, class: `${hint} ${tone}`.trim() }
     })
   })
 
   $effect(() => {
     const target = board.selected
+    const ready = keyboard && nodes.length > 0
 
-    if (!target) {
+    if (!target || !ready || target === centred) {
       return
     }
 
-    untrack(() => {
-      if (nodes.length === 0) {
-        return
-      }
-
-      board.table = target
-      board.column = -1
-
-      const table = plain.find(entry => entry.name === target)
-      const index =
-        board.needle && table
-          ? table.columns.findIndex(column =>
-              column.name.toLowerCase().includes(board.needle),
-            )
-          : -1
-
-      if (index >= 0 && table) {
-        board.column = index
-
-        const spot =
-          flow.getInternalNode(target)?.internals.positionAbsolute ??
-          nodes.find(node => node.id === target)?.position
-
-        if (spot) {
-          flow.setCenter(
-            spot.x + NODE_CENTRE,
-            spot.y + columnOffset(table, index),
-            { zoom: 1, duration: 220 },
-          )
-
-          return
-        }
-      }
-
-      flow.fitView({
-        nodes: [{ id: target }],
-        duration: 220,
-        maxZoom: 1,
-        minZoom: 1,
-      })
-    })
+    untrack(() => centre(target))
   })
 
   $effect(() => {
-    if (room === "") {
+    const line = channel
+
+    if (!line) {
       return
     }
 
-    const doc = new Y.Doc()
-    const positions = doc.getMap<{ x: number; y: number }>("positions")
-    const socket = new WebSocket(room)
+    const layout = untrack(() =>
+      shareLayout(line, (spots, whole) => {
+        board.spots = whole ? spots : { ...board.spots, ...spots }
+        nodes = nodes.map(node =>
+          spots[node.id] ? { ...node, position: spots[node.id] } : node,
+        )
+      }),
+    )
 
-    socket.binaryType = "arraybuffer"
-    shared = positions
-
-    const post = (bytes: Uint8Array) => {
-      socket.send(bytes.slice().buffer)
-    }
-
-    socket.onopen = () => post(Y.encodeStateAsUpdate(doc))
-    socket.onmessage = event =>
-      Y.applyUpdate(doc, new Uint8Array(event.data), "remote")
-
-    doc.on("update", (update: Uint8Array, origin: unknown) => {
-      if (origin !== "remote" && socket.readyState === WebSocket.OPEN) {
-        post(update)
-      }
-    })
-
-    positions.observe(() => {
-      nodes = nodes.map(node => {
-        const moved = positions.get(node.id)
-
-        return moved ? { ...node, position: moved } : node
-      })
-    })
+    shared = layout
 
     return () => {
+      layout.stop()
       shared = null
-      socket.close()
-      doc.destroy()
     }
   })
 
-  function publish() {
-    const spots: Record<string, { x: number; y: number }> = {}
+  $effect(() => {
+    board.rename = rename
+    board.ungroup = dropGroup
 
-    for (const node of nodes) {
-      if (node.type !== "table") {
-        continue
-      }
+    return () => {
+      board.rename = null
+      board.ungroup = null
+      clearTimeout(settle)
+    }
+  })
 
-      spots[node.id] = { x: node.position.x, y: node.position.y }
-      shared?.set(node.id, spots[node.id])
+  const GRID = "color-mix(in oklch, var(--color-base-content) 6%, transparent)"
+
+  const pace = () => (calm() ? 0 : TIMING.base)
+
+  function centre(target: string) {
+    centred = target
+    board.table = target
+    board.column = -1
+
+    const table = plain.find(entry => entry.name === target)
+    const index =
+      board.needle && table
+        ? table.columns.findIndex(column =>
+            column.name.toLowerCase().includes(board.needle),
+          )
+        : -1
+
+    const spot =
+      flow.getInternalNode(target)?.internals.positionAbsolute ??
+      nodes.find(node => node.id === target)?.position
+
+    if (index >= 0 && table && spot) {
+      board.column = index
+      flow.setCenter(
+        spot.x + nodeCentre(),
+        spot.y + columnOffset(table, index),
+        { zoom: 1, duration: pace() },
+      )
+
+      return
     }
 
+    flow.fitView({
+      nodes: [{ id: target }],
+      duration: pace(),
+      maxZoom: 1,
+      minZoom: 1,
+    })
+  }
+
+  function reveal(target: string) {
+    const node = flow.getInternalNode(target)
+    const box = frame?.getBoundingClientRect()
+
+    if (!node || !box) {
+      return
+    }
+
+    const { x, y, zoom } = flow.getViewport()
+    const spot = node.internals.positionAbsolute
+    const width = node.measured.width ?? 0
+    const height = node.measured.height ?? 0
+    const left = spot.x * zoom + x
+    const top = spot.y * zoom + y
+
+    const inside =
+      left >= 0 &&
+      top >= 0 &&
+      left + width * zoom <= box.width &&
+      top + height * zoom <= box.height
+
+    if (!inside) {
+      flow.setCenter(spot.x + width / 2, spot.y + height / 2, {
+        zoom,
+        duration: pace(),
+      })
+    }
+  }
+
+  function glide() {
+    if (calm()) {
+      return
+    }
+
+    clearTimeout(settle)
+    gliding = true
+    settle = setTimeout(() => (gliding = false), TIMING.slow)
+  }
+
+  function publish() {
+    const spots: Record<string, Spot> = {}
+
+    for (const node of nodes) {
+      if (node.type !== "level") {
+        spots[node.id] = { x: node.position.x, y: node.position.y }
+      }
+    }
+
+    board.spots = spots
+    shared?.keep(spots)
     onlayout?.({ spots, groups: $state.snapshot(board.groups) })
   }
 
@@ -256,7 +311,7 @@
     board.groups = [
       ...kept,
       {
-        id: `g${kept.length + 1}`,
+        id: crypto.randomUUID(),
         name: `${words.groupName} ${kept.length + 1}`,
         tables: [...board.picked],
       },
@@ -264,9 +319,6 @@
 
     regroup()
   }
-
-  let thinking = $state<AbortController | null>(null)
-  let notice = $state("")
 
   async function suggest() {
     if (thinking) {
@@ -293,7 +345,7 @@
         return
       }
 
-      board.groups = found
+      board.groups = distinct(found)
       regroup()
     } catch (failure) {
       if (!stopper.signal.aborted) {
@@ -309,28 +361,33 @@
   function regroup() {
     const built = toFlow(plain, board.groups, words.rest)
 
+    glide()
     nodes = built.nodes
     linked = built.edges
     board.spots = {}
-    flow.fitView({ padding: 0.12, maxZoom: 1, duration: 240 })
+    flow.fitView({ padding: 0.12, maxZoom: 1, duration: pace() })
     publish()
   }
-
-  $effect(() => {
-    board.rename = rename
-    board.ungroup = dropGroup
-
-    return () => {
-      board.rename = null
-      board.ungroup = null
-    }
-  })
 
   function rename(id: string, name: string) {
     board.groups = board.groups.map(group =>
       group.id === id ? { ...group, name } : group,
     )
     publish()
+  }
+
+  function dropGroup(id: string) {
+    board.groups = board.groups.filter(group => group.id !== id)
+    regroup()
+  }
+
+  function showGroup(id: string) {
+    flow.fitView({
+      nodes: [{ id: `band:${id}` }],
+      padding: 0.12,
+      maxZoom: 1,
+      duration: pace(),
+    })
   }
 
   function openMenu(event: MouseEvent, table: string) {
@@ -341,9 +398,9 @@
     }
 
     const held = table === "" ? undefined : board.groupOf(table)
-    const items: MenuItem[] = []
+    const items = [...(menuItems?.(table === "" ? null : table) ?? [])]
 
-    if (held === undefined && board.ondefine) {
+    if (table !== "" && board.ondefine) {
       items.push({
         label: words.define,
         icon: "lucide:file-code-2",
@@ -352,11 +409,7 @@
     }
 
     if (board.picked.length > 1) {
-      items.push({
-        label: words.group,
-        icon: "lucide:group",
-        run: makeGroup,
-      })
+      items.push({ label: words.group, icon: "lucide:group", run: makeGroup })
     }
 
     if (held) {
@@ -376,11 +429,7 @@
     }
 
     if (onsuggest) {
-      items.push({
-        label: words.think,
-        icon: "lucide:sparkles",
-        run: suggest,
-      })
+      items.push({ label: words.think, icon: "lucide:sparkles", run: suggest })
     }
 
     items.push({
@@ -393,11 +442,6 @@
     })
 
     menu.show(event, items)
-  }
-
-  function dropGroup(id: string) {
-    board.groups = board.groups.filter(group => group.id !== id)
-    regroup()
   }
 
   function arrangePicked() {
@@ -419,8 +463,11 @@
 
     let offset = 0
 
+    glide()
     nodes = nodes.map(node => {
-      if (!picked.has(node.id)) {
+      const table = plain.find(entry => entry.name === node.id)
+
+      if (!picked.has(node.id) || !table) {
         return node
       }
 
@@ -429,7 +476,7 @@
         position: { x: anchor.x, y: anchor.y + offset },
       }
 
-      offset += 28 + 54 + 24 + 22 * (tables.find(t => t.name === node.id)?.columns.length ?? 3)
+      offset += cardHeight(table) + rem(2)
 
       return placed
     })
@@ -445,7 +492,6 @@
     }
 
     armed = false
-
     regroup()
   }
 
@@ -470,7 +516,7 @@
     board.column = column
     flow.fitView({
       nodes: [{ id: table }],
-      duration: 180,
+      duration: calm() ? 0 : TIMING.quick,
       maxZoom: 1,
       minZoom: 1,
     })
@@ -516,14 +562,16 @@
     }
   }
 
-  function keys(event: KeyboardEvent) {
-    if (!keyboard) {
-      return
+  function enter() {
+    const open = board.onopen ?? onselect
+
+    if (board.table) {
+      open?.(board.table)
     }
+  }
 
-    const target = event.target as HTMLElement | null
-
-    if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
+  function keys(event: KeyboardEvent) {
+    if (!keyboard || event.defaultPrevented || event.isComposing) {
       return
     }
 
@@ -535,16 +583,24 @@
       return
     }
 
+    const target = event.target
+
+    if (
+      target instanceof HTMLElement &&
+      target.closest(
+        "input, textarea, select, [contenteditable], [role='dialog'], " +
+          "button:not([data-cursor])",
+      )
+    ) {
+      return
+    }
+
     const steps: Record<string, () => void> = {
       ArrowDown: () => move(1, "row"),
       ArrowUp: () => move(-1, "row"),
       ArrowRight: () => move(1, "level"),
       ArrowLeft: () => move(-1, "level"),
-      Enter: () => {
-        if (board.table) {
-          onselect?.(board.table)
-        }
-      },
+      Enter: enter,
     }
 
     const step = steps[event.key]
@@ -558,138 +614,167 @@
 
 <svelte:window onkeydown={keys} />
 
-<SvelteFlow
-  proOptions={{ hideAttribution: true }}
-  bind:nodes
-  bind:edges
-  {nodeTypes}
-  colorMode={dark ? "dark" : "light"}
-  fitView
-  fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
-  minZoom={0.15}
-  nodesConnectable={false}
-  elementsSelectable
-  selectionOnDrag
-  panOnDrag={[1, 2]}
-  panOnScroll
-  onnodedragstop={publish}
-  onnodecontextmenu={({ event, node }) =>
-    openMenu(event as MouseEvent, node.id)}
-  onselectioncontextmenu={({ event }) => openMenu(event as MouseEvent, "")}
-  onpaneclick={() => {
-    board.picked = []
-    board.table = null
-    board.column = -1
-  }}
-  onpanecontextmenu={({ event }) => openMenu(event as MouseEvent, "")}
-  onselectionchange={collect}
-  onnodeclick={({ node }) => {
-    board.table = node.id
-    board.column = -1
-    onselect?.(node.id)
-  }}
+<div
+  bind:this={frame}
+  class={["board relative size-full", gliding && "gliding"]}
 >
-  <Background gap={24} />
+  <button
+    type="button"
+    data-cursor
+    aria-describedby={hint}
+    onclick={enter}
+    class={[
+      "absolute top-4 left-4 z-10 flex items-center gap-2 floating px-3 py-2",
+      "text-xs hairline",
+      "pointer-events-none opacity-0 focus-visible:pointer-events-auto",
+      "focus-visible:opacity-100",
+    ]}
+  >
+    <Icon icon="lucide:keyboard" class="size-4 shrink-0 text-primary" />
+    {spoken || words.board}
+  </button>
 
-  {#if minimap}
-    <MiniMap
-      position="bottom-right"
-      width={128}
-      height={80}
-      nodeStrokeWidth={2}
-      nodeBorderRadius={2}
-      class="rounded-field floating lift"
+  <SvelteFlow
+    proOptions={{ hideAttribution: true }}
+    bind:nodes
+    bind:edges
+    {nodeTypes}
+    colorMode={dark ? "dark" : "light"}
+    fitView
+    fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
+    minZoom={0.15}
+    nodesConnectable={false}
+    elementsSelectable
+    selectionOnDrag
+    disableKeyboardA11y
+    panOnDrag={[1, 2]}
+    panOnScroll={scrollPan}
+    zoomOnScroll={scrollPan}
+    preventScrolling={scrollPan}
+    ariaLabelConfig={{
+      "controls.ariaLabel": words.controls,
+      "controls.zoomIn.ariaLabel": words.zoomIn,
+      "controls.zoomOut.ariaLabel": words.zoomOut,
+      "controls.fitView.ariaLabel": words.fit,
+      "minimap.ariaLabel": words.minimap,
+      "node.a11yDescription.default": words.keys,
+      "node.a11yDescription.keyboardDisabled": words.keys,
+    }}
+    onnodedragstop={publish}
+    onnodecontextmenu={({ event, node }) =>
+      openMenu(event as MouseEvent, node.type === "table" ? node.id : "")}
+    onselectioncontextmenu={({ event }) => openMenu(event as MouseEvent, "")}
+    onpaneclick={() => {
+      board.picked = []
+      board.table = null
+      board.column = -1
+    }}
+    onpanecontextmenu={({ event }) => openMenu(event as MouseEvent, "")}
+    onselectionchange={collect}
+    onnodepointerenter={({ node }) =>
+      (board.hover = node.type === "table" ? node.id : null)}
+    onnodepointerleave={() => (board.hover = null)}
+    onnodeclick={({ node }) => {
+      if (node.type !== "table") {
+        return
+      }
+
+      centred = node.id
+      board.table = node.id
+      board.column = -1
+      onselect?.(node.id)
+    }}
+  >
+    <Background
+      variant={BackgroundVariant.Lines}
+      gap={rem(4)}
+      bgColor="var(--color-base-200)"
+      patternColor={GRID}
     />
-  {/if}
-  <Controls showLock={false} />
 
-  <Panel position="top-right">
-    <div class="flex flex-col items-end gap-1">
-      <div class="flex items-center gap-1">
-        {#if board.picked.length > 1}
-          <button
-            type="button"
-            onclick={makeGroup}
-            class="flex items-center gap-2 rounded-field bg-base-100 px-2 py-1
-              text-xs hairline hover:bg-base-300"
-          >
-            <Icon icon="lucide:group" class="size-4" />
-            {words.group}
-          </button>
-        {/if}
+    {#if minimap}
+      <MiniMap
+        position="bottom-right"
+        width={rem(8)}
+        height={rem(5)}
+        pannable
+        class="hairline"
+      />
+    {/if}
 
-        {#if onsuggest}
-          <button
-            type="button"
-            onclick={suggest}
-            class="flex items-center gap-2 rounded-field bg-base-100 px-2 py-1
-              text-xs hairline hover:bg-base-300"
-          >
-            <Icon
-              icon={thinking ? "lucide:loader-circle" : "lucide:sparkles"}
-              class="size-4 {thinking ? 'animate-spin' : 'text-accent'}"
-            />
-            {thinking ? words.cancel : words.think}
-          </button>
-        {/if}
+    <Controls showLock={false} />
 
-        <button
-          type="button"
-          onclick={board.picked.length > 0 ? arrangePicked : arrangeAll}
-          class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
-            hairline {armed
-            ? 'bg-primary text-primary-content'
-            : 'bg-base-100 hover:bg-base-300'}"
-        >
-          <Icon icon="lucide:wand-sparkles" class="size-4" />
-          {board.picked.length > 0 ? words.picked : words.auto}
-        </button>
-      </div>
+    <Panel position="top-right">
+      <BoardTools
+        {words}
+        picked={board.picked.length}
+        groups={board.groups}
+        {armed}
+        thinking={thinking !== null}
+        {notice}
+        ongroup={makeGroup}
+        onsuggest={onsuggest ? suggest : undefined}
+        onarrange={board.picked.length > 0 ? arrangePicked : arrangeAll}
+        ondisarm={() => (armed = false)}
+        ondismiss={() => (notice = "")}
+        onshow={showGroup}
+        ondrop={dropGroup}
+      />
+    </Panel>
+  </SvelteFlow>
 
-      {#if notice}
-        <p
-          class="max-w-72 rounded-field floating px-2 py-1 text-right text-xs
-            break-keep text-error lift"
-        >
-          {notice}
-        </p>
-      {/if}
+  <p id={hint} class="sr-only">{words.keys}</p>
+  <p class="sr-only" aria-live="polite">{spoken}</p>
+</div>
 
-      {#if armed && board.picked.length === 0}
-        <button
-          type="button"
-          onclick={() => (armed = false)}
-          class="max-w-72 rounded-field floating px-2 py-1 text-right text-xs
-            break-keep text-base-content/60 lift hover:text-base-content"
-        >
-          {words.warn} · {words.cancel}
-        </button>
-      {/if}
+<style>
+  .board {
+    --xy-edge-stroke: color-mix(
+      in oklch,
+      var(--color-base-content) 24%,
+      transparent
+    );
+    --xy-controls-button-background-color: var(--color-base-100);
+    --xy-controls-button-background-color-hover: var(--color-base-300);
+    --xy-controls-button-color: var(--color-base-content);
+    --xy-controls-button-color-hover: var(--color-base-content);
+    --xy-controls-button-border-color: transparent;
+    --xy-controls-box-shadow: 0 0 0 0.0625rem
+      color-mix(in oklch, var(--color-base-content) 10%, transparent);
+    --xy-minimap-background-color: var(--color-base-100);
+    --xy-minimap-mask-background-color: color-mix(
+      in oklch,
+      var(--color-base-300) 60%,
+      transparent
+    );
+    --xy-minimap-mask-stroke-color: var(--color-primary);
+    --xy-minimap-node-background-color: color-mix(
+      in oklch,
+      var(--color-base-content) 22%,
+      transparent
+    );
+  }
 
-      {#if board.groups.length > 0}
-        <div class="flex max-w-64 flex-wrap justify-end gap-1">
-          {#each board.groups as group (group.id)}
-            <span
-              class="flex items-center gap-1 rounded-selector bg-primary/10 pr-1
-                pl-2 text-xs text-primary"
-            >
-              <span class="py-1">{group.name}</span>
+  .board :global(.svelte-flow__edge-path) {
+    transition:
+      stroke 140ms ease-out,
+      stroke-width 140ms ease-out;
+  }
 
-              <span class="opacity-60">{group.tables.length}</span>
+  .board :global(.edge-hint .svelte-flow__edge-path) {
+    stroke-dasharray: 0.25rem 0.25rem;
+  }
 
-              <button
-                type="button"
-                aria-label="{words.ungroup} {group.name}"
-                onclick={() => dropGroup(group.id)}
-                class="rounded-selector p-1 opacity-60 hover:opacity-100"
-              >
-                <Icon icon="lucide:x" class="size-3" />
-              </button>
-            </span>
-          {/each}
-        </div>
-      {/if}
-    </div>
-  </Panel>
-</SvelteFlow>
+  .board :global(.svelte-flow__edges) {
+    transition: opacity 140ms ease-out;
+  }
 
+  .board.gliding :global(.svelte-flow__edges) {
+    opacity: 0;
+    transition: none;
+  }
+
+  .board.gliding :global(.svelte-flow__node) {
+    transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+</style>

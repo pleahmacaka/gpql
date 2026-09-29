@@ -14,7 +14,11 @@ function walk(dir: string): string[] {
   return readdirSync(dir).flatMap(entry => {
     const path = join(dir, entry)
 
-    if (entry === "node_modules" || entry === "paraglide" || entry === "packs") {
+    if (
+      entry === "node_modules" ||
+      entry === "paraglide" ||
+      entry === "packs"
+    ) {
       return []
     }
 

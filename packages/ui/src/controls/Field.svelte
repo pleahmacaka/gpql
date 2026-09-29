@@ -5,6 +5,8 @@
     oninput?: (value: string) => void
     type?: "text" | "password"
     placeholder?: string
+    hint?: string
+    invalid?: boolean
     autofocus?: boolean
     onkeydown?: (event: KeyboardEvent) => void
   }
@@ -15,51 +17,52 @@
     oninput,
     type = "text",
     placeholder = "",
+    hint = "",
+    invalid = false,
     autofocus = false,
     onkeydown,
   }: Props = $props()
 
-  let focused = $state(false)
+  function focus(node: HTMLInputElement) {
+    if (autofocus) {
+      node.focus()
+    }
+  }
 </script>
 
-<label
-  class="block cursor-text rounded-field px-3 pt-2 pb-2 transition-colors
-    {focused ? 'bg-primary/10' : 'bg-base-200'}"
->
+<label class="group flex min-w-0 flex-col gap-1">
   <span
-    class="block text-xs {focused
-      ? 'text-primary'
-      : 'text-base-content/45'}"
+    class={[
+      "text-xs transition-colors group-focus-within:text-primary",
+      invalid ? "text-error" : "text-base-content/70",
+    ]}
   >
     {label}
   </span>
 
-  {#if type === "password"}
-    <input
-      type="password"
-      bind:value
-      oninput={event => oninput?.(event.currentTarget.value)}
-      {placeholder}
-      {onkeydown}
-      onfocus={() => (focused = true)}
-      onblur={() => (focused = false)}
-      class="w-full bg-transparent text-sm outline-none placeholder:text-base-content/25"
-    />
-  {:else}
-    <!-- svelte-ignore a11y_autofocus -->
-    <input
-      type="text"
-      bind:value
-      oninput={event => oninput?.(event.currentTarget.value)}
-      {placeholder}
-      {autofocus}
-      {onkeydown}
-      spellcheck="false"
-      autocapitalize="off"
-      autocorrect="off"
-      onfocus={() => (focused = true)}
-      onblur={() => (focused = false)}
-      class="w-full bg-transparent text-sm outline-none placeholder:text-base-content/25"
-    />
+  <input
+    {type}
+    bind:value
+    oninput={event => oninput?.(event.currentTarget.value)}
+    {placeholder}
+    {onkeydown}
+    aria-invalid={invalid}
+    spellcheck="false"
+    autocapitalize="off"
+    autocomplete="off"
+    {@attach focus}
+    class={[
+      "input input-sm w-full bg-base-100 text-sm",
+      "placeholder:text-base-content/60",
+      invalid && "input-error",
+    ]}
+  />
+
+  {#if hint}
+    <span
+      class={["text-xs", invalid ? "text-error" : "text-base-content/70"]}
+    >
+      {hint}
+    </span>
   {/if}
 </label>

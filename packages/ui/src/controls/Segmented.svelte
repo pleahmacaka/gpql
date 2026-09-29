@@ -1,11 +1,24 @@
 <script lang="ts">
+  import { Icon } from "../icons"
+  import { rem } from "./rem"
+
+  type Option = { value: string; label: string; icon?: string }
+
   type Props = {
-    options: { value: string; label: string }[]
+    options: Option[]
     value: string
     onpick?: (value: string) => void
+    label?: string
+    small?: boolean
   }
 
-  let { options, value = $bindable(), onpick }: Props = $props()
+  let {
+    options,
+    value = $bindable(),
+    onpick,
+    label,
+    small = false,
+  }: Props = $props()
 
   let strip = $state<HTMLDivElement | null>(null)
   let pill = $state({ left: 0, width: 0 })
@@ -17,10 +30,14 @@
     )
 
     if (!found) {
+      pill = { left: pill.left, width: 0 }
+
       return
     }
 
-    pill = { left: found.offsetLeft, width: found.offsetWidth }
+    const unit = rem(1)
+
+    pill = { left: found.offsetLeft / unit, width: found.offsetWidth / unit }
   }
 
   $effect(() => {
@@ -59,13 +76,20 @@
 
 <div
   bind:this={strip}
-  class="relative flex gap-1 rounded-selector bg-base-200 p-1"
+  role="group"
+  aria-label={label}
+  class="relative flex gap-1 bg-base-200 p-1 hairline"
 >
   <span
     aria-hidden="true"
-    class="absolute top-1 bottom-1 left-0 rounded-selector bg-base-100 hairline transition-all duration-200 ease-out {settled ? '' : 'duration-0'}"
-    style:transform="translateX({pill.left}px)"
-    style:width="{pill.width}px"
+    class={[
+      "absolute top-1 bottom-1 left-0 border-b-2 border-primary bg-base-100",
+      "hairline transition-all ease-out",
+      settled ? "duration-140" : "duration-0",
+      pill.width === 0 && "opacity-0",
+    ]}
+    style:transform="translateX({pill.left}rem)"
+    style:width="{pill.width}rem"
   ></span>
 
   {#each options as option (option.value)}
@@ -77,11 +101,19 @@
         onpick?.(option.value)
       }}
       aria-pressed={value === option.value}
-      class="relative z-10 flex-1 rounded-selector py-2 text-sm
-        transition-colors {value === option.value
-        ? 'font-medium'
-        : 'text-base-content/55 hover:text-base-content'}"
+      class={[
+        "relative flex flex-1 cursor-pointer items-center justify-center gap-2",
+        "whitespace-nowrap transition-colors",
+        small ? "px-2 py-1 text-xs" : "px-3 py-2 text-sm",
+        value === option.value
+          ? "font-medium text-base-content"
+          : "text-base-content/70 hover:text-base-content",
+      ]}
     >
+      {#if option.icon}
+        <Icon icon={option.icon} class="size-4 shrink-0" />
+      {/if}
+
       {option.label}
     </button>
   {/each}

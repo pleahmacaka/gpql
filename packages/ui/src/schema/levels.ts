@@ -1,16 +1,26 @@
 import type { Edge, Node } from "@xyflow/svelte"
 
-import type { TableGroup } from "./board.svelte"
+import { rem } from "../controls/rem"
 import type { SchemaTable } from "../types"
+import type { TableGroup } from "./board.svelte"
 
-export type Column = { label: string; tables: SchemaTable[] }
+export type Column = { label: string; depth: number; tables: SchemaTable[] }
 
-const NODE_WIDTH = 288
-const COLUMN_GAP = 64
-const ROW_GAP = 28
-const HEADER_HEIGHT = 54
-const LINE_HEIGHT = 22
-const CARD_PADDING = 24
+export const CARD = {
+  width: 18,
+  header: 2.5,
+  row: 1.5,
+  line: 1,
+  inset: 0.25,
+}
+
+const NOTE_WIDTH = 40
+const NOTE_LINES = 2
+const COLUMN_GAP = 4
+const ROW_GAP = 2
+const BAND_PAD = 1
+const BAND_HEAD = 2.5
+const LEVEL_LIFT = 2
 const SWEEPS = 4
 
 export function relationCount(tables: SchemaTable[]) {
@@ -21,11 +31,37 @@ export function relationCount(tables: SchemaTable[]) {
   )
 }
 
+export function splitReference(reference: string) {
+  const cut = reference.lastIndexOf(".")
+
+  return cut === -1
+    ? { table: reference, column: "" }
+    : { table: reference.slice(0, cut), column: reference.slice(cut + 1) }
+}
+
+function targetOf(reference: string) {
+  return splitReference(reference).table
+}
+
 function parentsOf(table: SchemaTable) {
   return table.columns
     .filter(column => column.references)
-    .map(column => column.references?.split(".")[0] ?? "")
+    .map(column => targetOf(column.references ?? ""))
     .filter(name => name !== table.name)
+}
+
+function distinctTables(tables: SchemaTable[]) {
+  const seen = new Set<string>()
+
+  return tables.filter(table => {
+    if (seen.has(table.name)) {
+      return false
+    }
+
+    seen.add(table.name)
+
+    return true
+  })
 }
 
 export function byLevel(tables: SchemaTable[]): Column[] {
@@ -72,6 +108,7 @@ export function byLevel(tables: SchemaTable[]): Column[] {
     .sort((a, b) => a - b)
     .map(key => ({
       label: key === 0 ? "referenced" : `level ${key}`,
+      depth: key,
       tables: grouped.get(key) ?? [],
     }))
 
@@ -82,13 +119,17 @@ function tidy(columns: Column[]) {
   const place = new Map<string, number>()
 
   for (const column of columns) {
-    column.tables.forEach((table, index) => place.set(table.name, index))
+    for (const [index, table] of column.tables.entries()) {
+      place.set(table.name, index)
+    }
   }
 
   for (let sweep = 0; sweep < SWEEPS; sweep += 1) {
     for (const column of columns.slice(1)) {
       column.tables.sort((left, right) => pull(left) - pull(right))
-      column.tables.forEach((table, index) => place.set(table.name, index))
+      for (const [index, table] of column.tables.entries()) {
+        place.set(table.name, index)
+      }
     }
   }
 
@@ -107,37 +148,57 @@ function tidy(columns: Column[]) {
   }
 }
 
-export function noteLines(table: SchemaTable) {
-  const note = table.note ? table.note.split(/\r?\n/).length : 0
+const wide = (char: string) => (char.codePointAt(0) ?? 0) >= 0x2e80
 
-  return note + (table.policies?.length ?? 0)
+function weight(line: string) {
+  let total = 0
+
+  for (const char of line) {
+    total += wide(char) ? 2 : 1
+  }
+
+  return total
 }
 
-// the header wraps long names at roughly 24 characters per line
-function headerWraps(table: SchemaTable) {
-  return Math.max(Math.ceil(table.name.length / 24) - 1, 0)
+export function noteRows(table: SchemaTable) {
+  const note = table.note?.trim() ?? ""
+
+  if (note === "") {
+    return 0
+  }
+
+  const rows = note
+    .split(/\r?\n/)
+    .reduce(
+      (total, line) =>
+        total + Math.max(1, Math.ceil(weight(line) / NOTE_WIDTH)),
+      0,
+    )
+
+  return Math.min(NOTE_LINES, rows)
 }
 
-export function columnOffset(table: SchemaTable, index: number) {
-  const head = HEADER_HEIGHT + (headerWraps(table) + noteLines(table)) * LINE_HEIGHT
+export function noteHeight(table: SchemaTable) {
+  const rows = noteRows(table)
 
-  return head + index * LINE_HEIGHT + LINE_HEIGHT / 2
+  return rows === 0 ? 0 : rows * CARD.line + 1
 }
 
-export const NODE_CENTRE = NODE_WIDTH / 2
-
-function cardHeight(table: SchemaTable) {
-  const extra = headerWraps(table) + noteLines(table)
-
+function head(table: SchemaTable) {
   return (
-    HEADER_HEIGHT +
-    (table.columns.length + extra) * LINE_HEIGHT +
-    CARD_PADDING
+    CARD.header + noteHeight(table) + (table.policies?.length ?? 0) * CARD.row
   )
 }
 
-const BAND_PAD = 16
-const BAND_HEAD = 34
+export function columnOffset(table: SchemaTable, index: number) {
+  return rem(head(table) + CARD.inset + index * CARD.row + CARD.row / 2)
+}
+
+export function cardHeight(table: SchemaTable) {
+  return rem(head(table) + CARD.inset * 2 + table.columns.length * CARD.row)
+}
+
+export const nodeCentre = () => rem(CARD.width / 2)
 
 function settle(tables: SchemaTable[], groups: TableGroup[]) {
   const home = new Map<string, string>()
@@ -206,11 +267,15 @@ function bands(
   const found = new Map(tables.map(table => [table.name, table]))
   const taken = new Set<string>()
   const nodes: Node[] = []
+  const width = rem(CARD.width + BAND_PAD * 2)
   let x = 0
 
   for (const group of settle(tables, groups)) {
     const members = byLevel(
       group.tables
+        .filter(
+          (name, spot, all) => !taken.has(name) && all.indexOf(name) === spot,
+        )
         .map(name => found.get(name))
         .filter((table): table is SchemaTable => table !== undefined),
     ).flatMap(column => column.tables)
@@ -219,42 +284,42 @@ function bands(
       continue
     }
 
-    let y = BAND_HEAD
+    const band = `band:${group.id}`
+    let y = rem(BAND_HEAD)
 
     const inside: Node[] = members.map(table => {
       const node: Node = {
         id: table.name,
         type: "table",
-        position: { x: BAND_PAD, y },
+        position: { x: rem(BAND_PAD), y },
         data: { table },
-        parentId: group.id,
+        parentId: band,
         extent: "parent" as const,
         deletable: false,
       }
 
       taken.add(table.name)
-      y += cardHeight(table) + ROW_GAP
+      y += cardHeight(table) + rem(ROW_GAP)
 
       return node
     })
 
-    const width = NODE_WIDTH + BAND_PAD * 2
-    const height = y - ROW_GAP + BAND_PAD * 2
+    const height = y - rem(ROW_GAP) + rem(BAND_PAD)
 
     nodes.push({
-      id: group.id,
+      id: band,
       type: "band",
       position: { x, y: 0 },
       data: { id: group.id, name: group.name, count: members.length },
       width,
       height,
-      style: `width: ${width}px; height: ${height}px`,
+      style: `width: ${width / rem(1)}rem; height: ${height / rem(1)}rem`,
       selectable: true,
       deletable: false,
     })
 
     nodes.push(...inside)
-    x += NODE_WIDTH + BAND_PAD * 2 + COLUMN_GAP
+    x += width + rem(COLUMN_GAP)
   }
 
   return {
@@ -264,11 +329,23 @@ function bands(
   }
 }
 
+const link = (id: string, source: string, handle: string, target: string) => ({
+  id,
+  source,
+  sourceHandle: handle,
+  target,
+  targetHandle: "referenced",
+  type: "step",
+  selectable: false,
+  deletable: false,
+})
+
 export function toFlow(
-  tables: SchemaTable[],
+  listed: SchemaTable[],
   groups: TableGroup[] = [],
   rest = "rest",
 ) {
+  const tables = distinctTables(listed)
   const known = new Set(tables.map(table => table.name))
   const nodes: Node[] = []
   const edges: Edge[] = []
@@ -281,17 +358,19 @@ export function toFlow(
     nodes.push(...held.nodes)
   }
 
-  const columns = byLevel(free)
-
-  columns.forEach((column, index) => {
-    const x = shift + index * (NODE_WIDTH + COLUMN_GAP)
+  for (const [index, column] of byLevel(free).entries()) {
+    const x = shift + index * rem(CARD.width + COLUMN_GAP)
     let y = 0
 
     nodes.push({
       id: `level:${index}`,
       type: "level",
-      position: { x, y: -34 },
-      data: { label: held ? `${rest}, ${column.label}` : column.label },
+      position: { x, y: -rem(LEVEL_LIFT) },
+      data: {
+        label: held ? `${rest}, ${column.label}` : column.label,
+        depth: column.depth,
+        grouped: held !== null,
+      },
       draggable: false,
       selectable: false,
       deletable: false,
@@ -306,49 +385,30 @@ export function toFlow(
         deletable: false,
       })
 
-      y += cardHeight(table) + ROW_GAP
+      y += cardHeight(table) + rem(ROW_GAP)
     }
-  })
+  }
 
   for (const table of tables) {
-    for (const column of table.columns) {
-      const parent = column.references?.split(".")[0]
+    for (const [index, column] of table.columns.entries()) {
+      const parent = column.references ? targetOf(column.references) : ""
 
-      if (!parent || !known.has(parent)) {
-        continue
+      if (parent && known.has(parent)) {
+        edges.push(
+          link(`${table.name}:${index}`, table.name, `column:${index}`, parent),
+        )
       }
-
-      edges.push({
-        id: `${table.name}.${column.name}`,
-        source: table.name,
-        sourceHandle: column.name,
-        target: parent,
-        targetHandle: "referenced",
-        type: "smoothstep",
-        selectable: false,
-        deletable: false,
-      })
     }
 
-    for (const hint of table.hints ?? []) {
-      const parent = hint.split(".")[0]
+    for (const [index, hint] of (table.hints ?? []).entries()) {
+      const parent = targetOf(hint)
 
-      if (!known.has(parent) || parent === table.name) {
-        continue
+      if (known.has(parent) && parent !== table.name) {
+        edges.push({
+          ...link(`${table.name}~${index}`, table.name, "note", parent),
+          class: "edge-hint",
+        })
       }
-
-      edges.push({
-        id: `${table.name}~${hint}`,
-        source: table.name,
-        sourceHandle: "note",
-        target: parent,
-        targetHandle: "referenced",
-        type: "smoothstep",
-        selectable: false,
-        deletable: false,
-        animated: false,
-        style: "stroke-dasharray: 4 4",
-      })
     }
   }
 

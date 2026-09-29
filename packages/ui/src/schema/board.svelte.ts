@@ -1,3 +1,5 @@
+import { getContext, setContext } from "svelte"
+
 export type TableGroup = {
   id: string
   name: string
@@ -6,11 +8,61 @@ export type TableGroup = {
 
 export type Spot = { x: number; y: number }
 
+export const WORDS = {
+  auto: "Auto arrange",
+  picked: "Arrange picked",
+  group: "Group",
+  ungroup: "Ungroup",
+  rename: "Rename group",
+  warn: "positions reset, groups stay. click again",
+  groupName: "group",
+  think: "Group with AI",
+  nothing: "the model found no grouping worth keeping",
+  rest: "everything else",
+  define: "Show definition",
+  cancel: "Cancel",
+  dismiss: "Dismiss",
+  open: "Open rows",
+  referenced: "Referenced",
+  level: "Level",
+  primary: "primary key",
+  nullable: "nullable",
+  references: "references",
+  board: "Schema diagram",
+  keys: "Arrow keys move between tables and columns, Enter opens the table",
+  controls: "Zoom controls",
+  zoomIn: "Zoom in",
+  zoomOut: "Zoom out",
+  fit: "Fit to view",
+  minimap: "Minimap",
+}
+
+export type Words = typeof WORDS
+
+const SPOKEN = Symbol("schema words")
+
+export const speak = (words: () => Words) => setContext(SPOKEN, words)
+
+export const spoken = () => getContext<() => Words>(SPOKEN) ?? (() => WORDS)
+
+export function distinct(groups: TableGroup[]) {
+  const seen = new Set<string>()
+
+  return groups.map(group => {
+    const id = seen.has(group.id) ? crypto.randomUUID() : group.id
+
+    seen.add(id)
+
+    return id === group.id ? group : { ...group, id }
+  })
+}
+
 export class Board {
   selected = $state<string | null>(null)
   needle = $state("")
   table = $state<string | null>(null)
   column = $state(-1)
+  hover = $state<string | null>(null)
   picked = $state<string[]>([])
   groups = $state<TableGroup[]>([])
   onopen = $state<((table: string) => void) | null>(null)
@@ -39,6 +91,7 @@ export class Board {
 
   reset() {
     this.focus(null)
+    this.hover = null
     this.needle = ""
     this.picked = []
     this.groups = []

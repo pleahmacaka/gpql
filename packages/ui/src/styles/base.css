@@ -1,0 +1,161 @@
+@layer base {
+  :root {
+    font-synthesis-weight: none;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "tnum" 1;
+  }
+
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: inherit;
+  }
+
+  ::selection {
+    background-color: var(--color-primary);
+    color: var(--color-primary-content);
+  }
+
+  :focus-visible {
+    outline: 0.125rem solid var(--color-primary);
+    outline-offset: 0.125rem;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color:
+      color-mix(in oklch, var(--color-base-content) 18%, transparent)
+      transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 0.5rem;
+    height: 0.5rem;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--color-base-content) 18%, transparent);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--color-base-content) 34%, transparent);
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+.tip {
+  position: fixed;
+  z-index: 90;
+  display: none;
+  max-width: 20rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  background: var(--floating);
+  color: var(--color-base-content);
+  box-shadow:
+    0 0 0 0.0625rem
+      color-mix(in oklch, var(--color-base-content) 14%, transparent),
+    0 0.25rem 0.75rem oklch(0% 0 0 / 0.2);
+  white-space: pre-line;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+
+.svelte-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke-default: color-mix(
+    in oklch,
+    var(--color-base-content) 20%,
+    transparent
+  );
+  --xy-handle-border-color-default: transparent;
+  --xy-controls-button-background-color-default: var(--color-base-100);
+  --xy-controls-button-color-default: var(--color-base-content);
+  --xy-controls-button-border-color-default: transparent;
+  font-family: inherit;
+}
+
+.svelte-flow__attribution {
+  display: none;
+}
+
+.svelte-flow__controls {
+  gap: 0.25rem;
+  border-radius: var(--radius-box);
+  background: var(--color-base-100);
+  box-shadow: 0 0 0 0.0625rem
+    color-mix(in oklch, var(--color-base-content) 10%, transparent);
+  padding: 0.25rem;
+}
+
+.svelte-flow__controls-button {
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 0;
+  border-radius: var(--radius-field);
+  background: transparent;
+  color: var(--color-base-content);
+  transition: background-color var(--default-transition-duration) ease;
+}
+
+.svelte-flow__controls-button:hover {
+  background: var(--color-base-300);
+}
+
+.svelte-flow__controls-button svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  fill: currentColor;
+}
+
+.svelte-flow__minimap {
+  border-radius: var(--radius-field);
+  overflow: hidden;
+  background: var(--floating);
+}
+
+.svelte-flow__minimap-mask {
+  fill: color-mix(in oklch, var(--color-base-300) 55%, transparent);
+  stroke: color-mix(in oklch, var(--color-primary) 70%, transparent);
+  stroke-width: 2;
+}
+
+.svelte-flow__minimap-node {
+  fill: color-mix(in oklch, var(--color-base-content) 25%, transparent);
+  stroke: none;
+}
+
+.svelte-flow__edge.edge-near .svelte-flow__edge-path {
+  stroke: color-mix(in oklch, var(--color-primary) 70%, transparent);
+  stroke-width: 1.75;
+}
+
+.svelte-flow__edge.edge-far .svelte-flow__edge-path {
+  stroke: color-mix(in oklch, var(--color-base-content) 12%, transparent);
+  stroke-width: 1;
+}
+
+[data-motion="calm"] *,
+[data-motion="calm"] *::before,
+[data-motion="calm"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

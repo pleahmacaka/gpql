@@ -1,16 +1,20 @@
 <script lang="ts">
-  import { fade, scale } from "svelte/transition"
-
   import { Icon } from "../icons"
-  import { pop, veil } from "../motion"
+  import type { Ending } from "../motion"
+  import Dialog from "./Dialog.svelte"
+
+  type Tone = "primary" | "warning" | "error"
 
   type Props = {
     title: string
     body?: string
     confirm: string
     cancel: string
+    alternate?: string
+    onalternate?: () => void
     icon?: string
     danger?: boolean
+    tone?: Tone
     onconfirm: () => void
     oncancel: () => void
   }
@@ -20,86 +24,92 @@
     body = "",
     confirm,
     cancel,
+    alternate,
+    onalternate,
     icon = "lucide:trash-2",
     danger = true,
+    tone,
     onconfirm,
     oncancel,
   }: Props = $props()
 
-  let keep = $state<HTMLButtonElement | null>(null)
+  let shade = $derived<Tone>(tone ?? (danger ? "error" : "primary"))
+  let ending = $state<Ending>("cancel")
 
-  $effect(() => {
-    keep?.focus()
-  })
+  function settle(run: () => void, as: Ending) {
+    ending = as
+    run()
+  }
 
-  function keys(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      event.stopPropagation()
-      oncancel()
-    }
+  const BADGE = {
+    primary: "bg-primary/15 text-primary",
+    warning: "bg-warning/15 text-warning",
+    error: "bg-error/15 text-error",
+  }
 
-    if (event.key === "Enter") {
-      event.preventDefault()
-      onconfirm()
-    }
+  const ACTION = {
+    primary: "btn-primary",
+    warning: "btn-warning",
+    error: "btn-error",
   }
 </script>
 
-<svelte:window onkeydown={keys} />
-
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-  transition:fade={veil()}
-  onclick={oncancel}
-  class="fixed inset-0 z-70 grid place-items-center bg-base-300/45 p-6"
+<Dialog
+  label={title}
+  onclose={oncancel}
+  dismiss={cancel}
+  size="sm"
+  tone={shade}
+  role="alertdialog"
+  {ending}
 >
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    transition:scale={pop()}
-    onclick={event => event.stopPropagation()}
-    role="alertdialog"
-    aria-label={title}
-    tabindex="-1"
-    class="flex w-full max-w-sm flex-col gap-4 rounded-box floating p-4 lift"
-  >
-    <div class="flex items-start gap-3">
-      <span
-        class="grid size-8 shrink-0 place-items-center rounded-field
-          {danger ? 'bg-error/15 text-error' : 'bg-base-200 text-base-content'}"
-      >
-        <Icon {icon} class="size-4" />
-      </span>
+  <div class="flex gap-4 p-6">
+    <span
+      class={["grid size-8 shrink-0 place-items-center", BADGE[shade]]}
+    >
+      <Icon {icon} class="size-4" />
+    </span>
 
-      <div class="min-w-0 flex-1">
-        <h2 class="text-sm font-medium">{title}</h2>
+    <div class="min-w-0 flex-1">
+      <h2 class="text-base font-semibold tracking-tight text-balance">
+        {title}
+      </h2>
 
-        {#if body}
-          <p class="pt-1 text-xs break-all text-base-content/45">{body}</p>
-        {/if}
-      </div>
-    </div>
-
-    <div class="flex items-center justify-end gap-2">
-      <button
-        bind:this={keep}
-        type="button"
-        onclick={oncancel}
-        class="rounded-field bg-base-200 px-3 py-2 text-xs hover:bg-base-300"
-      >
-        {cancel}
-      </button>
-
-      <button
-        type="button"
-        onclick={onconfirm}
-        class="rounded-field px-3 py-2 text-xs
-          {danger
-          ? 'bg-error text-error-content hover:bg-error/90'
-          : 'bg-primary text-primary-content hover:bg-primary/90'}"
-      >
-        {confirm}
-      </button>
+      {#if body}
+        <p class="pt-2 text-sm wrap-anywhere text-base-content/70">{body}</p>
+      {/if}
     </div>
   </div>
-</div>
+
+  <div
+    class="flex justify-end gap-2 border-t border-base-content/10 px-6 py-4"
+  >
+    <button
+      type="button"
+      data-autofocus={shade === "primary" ? undefined : ""}
+      onclick={() => settle(oncancel, "cancel")}
+      class="btn btn-ghost btn-sm font-medium"
+    >
+      {cancel}
+    </button>
+
+    {#if alternate && onalternate}
+      <button
+        type="button"
+        onclick={() => settle(onalternate, "confirm")}
+        class="btn btn-soft btn-error btn-sm font-medium"
+      >
+        {alternate}
+      </button>
+    {/if}
+
+    <button
+      type="button"
+      data-autofocus={shade === "primary" ? "" : undefined}
+      onclick={() => settle(onconfirm, "confirm")}
+      class={["btn btn-sm font-medium", ACTION[shade]]}
+    >
+      {confirm}
+    </button>
+  </div>
+</Dialog>

@@ -67,3 +67,8 @@ export interface Probe {
   tone: "idle" | "busy" | "good" | "bad"
   text: string
 }
+
+export type LayoutChannel = {
+  send: (update: Uint8Array) => void
+  listen: (receive: (update: Uint8Array, epoch?: number) => void) => () => void
+}

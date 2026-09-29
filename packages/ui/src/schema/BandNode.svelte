@@ -1,10 +1,13 @@
 <script lang="ts">
   import type { NodeProps } from "@xyflow/svelte"
 
+  import { tooltip } from "../controls/tooltip"
   import { Icon } from "../icons"
-  import { board } from "./board.svelte"
+  import { board, spoken } from "./board.svelte"
 
   let { data }: NodeProps = $props()
+
+  const words = spoken()
 
   let id = $derived(data.id as string)
   let name = $derived(data.name as string)
@@ -19,66 +22,87 @@
   }
 
   function commit() {
+    if (!editing) {
+      return
+    }
+
     editing = false
 
-    if (draft.trim() !== "" && draft !== name) {
+    if (draft.trim() !== "" && draft.trim() !== name) {
       board.rename?.(id, draft.trim())
     }
   }
+
+  function keys(event: KeyboardEvent) {
+    if (event.isComposing) {
+      return
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault()
+      commit()
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      editing = false
+    }
+  }
+
+  function grab(node: HTMLInputElement) {
+    node.focus()
+    node.select()
+  }
 </script>
 
-<div
-  class="h-full w-full rounded-box border border-primary/25 bg-primary/5"
->
-  <header class="flex h-8 items-center gap-2 px-3">
+<section aria-label={name} class="relative size-full bg-primary/5">
+  <header class="flex h-10 items-center gap-2 px-4">
+    <span aria-hidden="true" class="size-2 shrink-0 bg-primary"></span>
+
     {#if editing}
-      <!-- svelte-ignore a11y_autofocus -->
       <input
-        autofocus
         bind:value={draft}
         onblur={commit}
-        onkeydown={event => {
-          if (event.key === "Enter") {
-            event.preventDefault()
-            commit()
-          }
-
-          if (event.key === "Escape") {
-            event.preventDefault()
-            editing = false
-          }
-        }}
-        class="nodrag min-w-0 flex-1 bg-transparent text-xs font-medium
-          text-primary outline-none select-text"
+        onkeydown={keys}
+        aria-label={words().rename}
+        {@attach grab}
+        class={[
+          "nodrag input input-xs min-w-0 flex-1 bg-base-100 text-xs",
+          "font-medium",
+        ]}
       />
     {:else}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <span
-        ondblclick={begin}
-        class="min-w-0 flex-1 truncate text-xs font-medium text-primary"
-      >
+      <span class="min-w-0 flex-1 truncate text-xs font-medium text-primary">
         {name}
       </span>
 
-      <span class="text-xs text-primary/50">{count}</span>
+      <span class="text-xs text-base-content/70 tabular-nums">{count}</span>
 
       <button
         type="button"
-        aria-label={name}
+        aria-label="{words().rename}, {name}"
+        use:tooltip={words().rename}
         onclick={begin}
-        class="nodrag rounded-selector p-1 text-primary/50 hover:text-primary"
+        class="nodrag btn btn-square btn-ghost btn-xs"
       >
         <Icon icon="lucide:pencil" class="size-3" />
       </button>
 
       <button
         type="button"
-        aria-label={name}
+        aria-label="{words().ungroup}, {name}"
+        use:tooltip={words().ungroup}
         onclick={() => board.ungroup?.(id)}
-        class="nodrag rounded-selector p-1 text-primary/50 hover:text-error"
+        class="nodrag btn btn-square btn-ghost btn-xs hover:text-error"
       >
         <Icon icon="lucide:ungroup" class="size-3" />
       </button>
     {/if}
   </header>
-</div>
+
+  <span
+    aria-hidden="true"
+    class="hud hud-wide pointer-events-none absolute inset-0"
+  ></span>
+</section>

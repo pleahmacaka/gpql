@@ -13,13 +13,15 @@
   let { icon, title, detail, children }: Props = $props()
 </script>
 
-<div class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-3">
-  <Icon {icon} class="size-4 text-base-content/40" />
+<div class="flex items-center gap-4 px-4 py-3">
+  <Icon {icon} class="size-4 shrink-0 text-base-content/70" />
 
-  <div class="flex-1">
+  <div class="min-w-0 flex-1">
     <p class="text-sm">{title}</p>
-    <p class="text-xs text-base-content/45">{detail}</p>
+    <p class="text-xs text-base-content/70">{detail}</p>
   </div>
 
-  {@render children()}
+  <div class="flex shrink-0 items-center gap-2">
+    {@render children()}
+  </div>
 </div>

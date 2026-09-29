@@ -13,15 +13,17 @@
   }
 </script>
 
-<span class="flex items-center gap-1 {extra}">
-  {#each keys as key, index (key)}
+<span class={["flex items-center gap-1", extra]}>
+  {#each keys as key, index (index)}
     {#if index > 0}
-      <span class="text-xs text-base-content/25">+</span>
+      <span aria-hidden="true" class="text-xs text-base-content/40">+</span>
     {/if}
 
     <kbd
-      class="rounded-selector bg-base-200 px-1 py-1 font-mono text-xs
-        leading-none text-base-content/55 hairline"
+      class={[
+        "min-w-5 bg-base-200 px-1 py-1 text-center text-xs leading-none",
+        "text-base-content/70 tabular-nums hairline",
+      ]}
     >
       {shown[key] ?? key.toUpperCase()}
     </kbd>
