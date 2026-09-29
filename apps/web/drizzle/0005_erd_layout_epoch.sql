@@ -1,0 +1,1 @@
+ALTER TABLE "gpql"."erd_room" ADD COLUMN "epoch" integer DEFAULT 0 NOT NULL;

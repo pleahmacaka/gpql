@@ -1,13 +1,13 @@
 import { json } from "@sveltejs/kit"
-import { eq } from "drizzle-orm"
-import { auth } from "$lib/server/auth"
-import { db } from "$lib/server/db"
+
+import { answer, readJson, signedIn } from "$lib/server/http"
 import {
-  syncPreference,
-  syncQuery,
-  syncRecent,
-} from "$lib/server/db/sync-schema"
-import type { SyncPayload } from "$lib/types"
+  everything,
+  forget,
+  merge,
+  readPayload,
+  SYNC_BODY_LIMIT,
+} from "$lib/server/sync"
 
 import type { RequestHandler } from "./$types"
 
@@ -38,100 +38,21 @@ function allow(request: Request): Record<string, string> {
 export const OPTIONS: RequestHandler = async ({ request }) =>
   new Response(null, { status: 204, headers: allow(request) })
 
-export const POST: RequestHandler = async ({ request }) => {
-  const session = await auth.api.getSession({ headers: request.headers })
+export const POST: RequestHandler = ({ request }) =>
+  answer(async () => {
+    const user = await signedIn(request)
+    const mine = readPayload(await readJson(request, SYNC_BODY_LIMIT))
 
-  if (!session) {
-    return json(
-      { message: "sign in first" },
-      { status: 401, headers: allow(request) },
-    )
-  }
+    await merge(user.id, mine)
 
-  const userId = session.user.id
-  const mine = (await request.json()) as SyncPayload
+    return json(await everything(user.id, mine.version === 2))
+  }, allow(request))
 
-  await db.transaction(async tx => {
-    for (const row of mine.preferences) {
-      await tx
-        .insert(syncPreference)
-        .values({ ...row, userId })
-        .onConflictDoUpdate({
-          target: [syncPreference.userId, syncPreference.key],
-          set: { value: row.value },
-        })
-    }
+export const DELETE: RequestHandler = ({ request }) =>
+  answer(async () => {
+    const user = await signedIn(request)
 
-    for (const row of mine.recents) {
-      await tx
-        .insert(syncRecent)
-        .values({ ...row, userId })
-        .onConflictDoUpdate({
-          target: [syncRecent.userId, syncRecent.url],
-          set: { label: row.label, detail: row.detail, openedAt: row.openedAt },
-        })
-    }
+    await forget(user.id)
 
-    for (const row of mine.queries) {
-      await tx
-        .insert(syncQuery)
-        .values({ ...row, userId })
-        .onConflictDoUpdate({
-          target: syncQuery.id,
-          set: { name: row.name, sql: row.sql, savedAt: row.savedAt },
-          setWhere: eq(syncQuery.userId, userId),
-        })
-    }
-  })
-
-  return json(
-    {
-      preferences: await db
-        .select({ key: syncPreference.key, value: syncPreference.value })
-        .from(syncPreference)
-        .where(eq(syncPreference.userId, userId)),
-      recents: await db
-        .select({
-          url: syncRecent.url,
-          kind: syncRecent.kind,
-          label: syncRecent.label,
-          detail: syncRecent.detail,
-          openedAt: syncRecent.openedAt,
-        })
-        .from(syncRecent)
-        .where(eq(syncRecent.userId, userId)),
-      queries: await db
-        .select({
-          id: syncQuery.id,
-          name: syncQuery.name,
-          sql: syncQuery.sql,
-          target: syncQuery.target,
-          savedAt: syncQuery.savedAt,
-        })
-        .from(syncQuery)
-        .where(eq(syncQuery.userId, userId)),
-    },
-    { headers: allow(request) },
-  )
-}
-
-export const DELETE: RequestHandler = async ({ request }) => {
-  const session = await auth.api.getSession({ headers: request.headers })
-
-  if (!session) {
-    return json(
-      { message: "sign in first" },
-      { status: 401, headers: allow(request) },
-    )
-  }
-
-  const userId = session.user.id
-
-  await db.transaction(async tx => {
-    await tx.delete(syncPreference).where(eq(syncPreference.userId, userId))
-    await tx.delete(syncRecent).where(eq(syncRecent.userId, userId))
-    await tx.delete(syncQuery).where(eq(syncQuery.userId, userId))
-  })
-
-  return json({ cleared: true }, { headers: allow(request) })
-}
+    return json({ cleared: true })
+  }, allow(request))
