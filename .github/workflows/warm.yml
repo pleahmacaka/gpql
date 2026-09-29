@@ -12,6 +12,9 @@ on:
       - ".github/workflows/warm.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: warm
   cancel-in-progress: true
@@ -21,14 +24,14 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
-          bun-version: latest
+          bun-version: 1.4.0
 
       - name: cache bun modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           # only the global store: bun links node_modules into it, and those
           # links do not survive a cache round trip
@@ -39,7 +42,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: cache the built frontend
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             apps/desktop/.svelte-kit
@@ -49,18 +52,18 @@ jobs:
             vite-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/desktop/vite.config.ts') }}-
             vite-${{ runner.os }}-
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: stable
 
       - name: cache cargo and the rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           workspaces: apps/desktop/src-tauri -> target
           cache-all-crates: true
           cache-on-failure: true
 
-      - name: build the frontend
-        run: bun run --filter desktop build
-
-      - name: build the rust side
-        working-directory: apps/desktop/src-tauri
-        run: cargo build --release
+      # plain cargo build skips tauri/custom-protocol, which tauri build turns on
+      - name: build the app the way the release does
+        working-directory: apps/desktop
+        run: bun run tauri build --no-bundle
