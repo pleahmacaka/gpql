@@ -1,103 +1,74 @@
 <script lang="ts">
-  type Props = { code: string }
+  type Props = { code: string; caret?: boolean }
 
-  let { code }: Props = $props()
+  let { code, caret = false }: Props = $props()
 
   const KEYWORDS = new Set([
     "select",
     "from",
     "join",
-    "left",
-    "inner",
     "on",
     "where",
     "group",
     "order",
     "by",
     "desc",
-    "asc",
     "limit",
-    "and",
-    "or",
-    "not",
     "as",
     "interval",
-    "now",
   ])
 
-  const pattern =
-    /('[^']*'|--[^\n]*|\b\d+(?:\.\d+)?\b|[A-Za-z_][A-Za-z0-9_]*|[^A-Za-z0-9_\s]+|\s+)/g
+  const TOKEN = /'[^']*'?|\d+|\w+|\s+|[^\w\s']+/g
 
-  function tone(piece: string, next: string): string {
+  function tone(piece: string, next: string) {
     if (piece.startsWith("'")) {
-      return "tok-string"
+      return "text-accent"
     }
 
-    if (piece.startsWith("--")) {
-      return "tok-comment"
+    if (KEYWORDS.has(piece)) {
+      return "text-primary"
     }
 
-    if (/^\d/.test(piece)) {
-      return "tok-number"
+    if (next.startsWith("(")) {
+      return "text-secondary-content"
     }
 
-    if (/^[A-Za-z_]/.test(piece)) {
-      if (KEYWORDS.has(piece.toLowerCase())) {
-        return "tok-keyword"
-      }
-
-      return next.startsWith("(") ? "tok-function" : "tok-field"
-    }
-
-    if (/^\s+$/.test(piece)) {
+    if (piece.trim() === "" || /\w/.test(piece)) {
       return ""
     }
 
-    return "tok-punctuation"
+    return "text-base-content/70"
   }
 
   let pieces = $derived.by(() => {
-    const raw = code.match(pattern) ?? []
+    const raw = code.match(TOKEN) ?? []
 
-    return raw.map((piece, index) => ({
-      text: piece,
-      kind: tone(piece, raw[index + 1] ?? ""),
+    return raw.map((text, index) => ({
+      text,
+      kind: tone(text, raw[index + 1] ?? ""),
     }))
   })
 </script>
 
 <pre
-  class="flex-1 overflow-auto rounded-field bg-base-200 p-4 font-mono text-xs
-    leading-relaxed text-base-content/80">{#each pieces as piece, index (index)}<span
-      class={piece.kind}>{piece.text}</span>{/each}</pre>
+  class={[
+    "overflow-x-auto rounded-field bg-base-200",
+    "px-4 py-3 text-sm leading-relaxed",
+  ]}>{#each pieces as piece, index (index)}<span class={piece.kind}
+      >{piece.text}</span
+    >{/each}{#if caret}<span
+      aria-hidden="true"
+      class="caret inline-block h-4 w-2 bg-primary align-middle"
+    ></span>{/if}</pre>
 
 <style>
-  .tok-keyword {
-    color: var(--color-info);
+  .caret {
+    animation: blink 1s steps(1) infinite;
   }
 
-  .tok-string {
-    color: var(--color-secondary-content);
-  }
-
-  .tok-number {
-    color: var(--color-warning);
-  }
-
-  .tok-function {
-    color: var(--color-primary);
-  }
-
-  .tok-field {
-    color: var(--color-accent);
-  }
-
-  .tok-comment {
-    color: color-mix(in oklch, currentColor 45%, transparent);
-    font-style: italic;
-  }
-
-  .tok-punctuation {
-    color: color-mix(in oklch, currentColor 60%, transparent);
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
   }
 </style>
