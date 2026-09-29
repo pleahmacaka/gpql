@@ -1,11 +1,19 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use russh::client::{self, Handle};
 use russh::keys::key::PublicKey;
+use russh::Preferred;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use tokio::net::TcpListener;
+use tokio::time::timeout;
+
+const DIAL_WAIT: Duration = Duration::from_secs(10);
+const AUTH_WAIT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -26,21 +34,238 @@ pub struct TunnelConfig {
 
 impl TunnelConfig {
     pub fn wanted(&self) -> bool {
-        return !self.host.trim().is_empty();
+        !self.host.trim().is_empty()
     }
 }
 
-struct Blind;
+struct Guard {
+    host: String,
+    port: u16,
+}
+
+#[derive(Debug)]
+enum Refusal {
+    Ssh(russh::Error),
+    Key(String),
+}
+
+impl From<russh::Error> for Refusal {
+    fn from(error: russh::Error) -> Self {
+        Refusal::Ssh(error)
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Refusal::Ssh(error) => write!(out, "ssh: {error}"),
+            Refusal::Key(message) => out.write_str(message),
+        }
+    }
+}
 
 #[async_trait::async_trait]
-impl client::Handler for Blind {
-    type Error = russh::Error;
+impl client::Handler for Guard {
+    type Error = Refusal;
 
-    // a jump host is named by the user, and gpql keeps no known_hosts file, so
-    // there is nothing here to check a key against
-    async fn check_server_key(&mut self, _key: &PublicKey) -> Result<bool, Self::Error> {
+    async fn check_server_key(&mut self, key: &PublicKey) -> Result<bool, Self::Error> {
+        let (host, port, key) = (self.host.clone(), self.port, key.clone());
+
+        tokio::task::spawn_blocking(move || trust(&host, port, &key))
+            .await
+            .map_err(|error| Refusal::Key(error.to_string()))?
+            .map_err(Refusal::Key)
+    }
+}
+
+fn learned_hosts() -> Result<PathBuf, String> {
+    dirs::data_dir()
+        .map(|folder| folder.join("gpql").join("known_hosts"))
+        .ok_or_else(|| "no app data folder on this machine".to_string())
+}
+
+fn changed(host: &str, port: u16, key: &PublicKey, file: &Path, line: usize) -> String {
+    format!(
+        "the host key of {host}:{port} does not match the one on line {line} of {}; the server now offers SHA256:{}. If the jump host was rebuilt, remove that line and connect again",
+        file.display(),
+        key.fingerprint()
+    )
+}
+
+struct Record {
+    file: PathBuf,
+    line: usize,
+    revoked: bool,
+    key: PublicKey,
+}
+
+fn hashed_name(wanted: &str, hashed: &str) -> bool {
+    use base64::Engine;
+    use hmac::Mac;
+
+    let decode = |part| base64::engine::general_purpose::STANDARD.decode(part);
+
+    let Some((salt, hash)) = hashed.split_once('|') else {
+        return false;
+    };
+
+    let (Ok(salt), Ok(hash)) = (decode(salt), decode(hash)) else {
+        return false;
+    };
+
+    hmac::Hmac::<sha1::Sha1>::new_from_slice(&salt)
+        .is_ok_and(|mac| mac.chain_update(wanted).verify_slice(&hash).is_ok())
+}
+
+fn names(wanted: &str, hosts: &str) -> bool {
+    hosts
+        .split(',')
+        .any(|entry| match entry.strip_prefix("|1|") {
+            Some(hashed) => hashed_name(wanted, hashed),
+            None => entry == wanted,
+        })
+}
+
+// a key type russh can't read skips its line instead of failing the whole file
+fn records(host: &str, port: u16, file: &Path) -> Vec<Record> {
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return Vec::new();
+    };
+
+    let wanted = if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{host}]:{port}")
+    };
+
+    text.lines()
+        .enumerate()
+        .filter_map(|(at, line)| {
+            let mut fields = line.split_whitespace();
+            let mut hosts = fields.next()?;
+            let revoked = hosts == "@revoked";
+
+            if revoked {
+                hosts = fields.next()?;
+            }
+
+            if hosts.starts_with(['#', '@']) || !names(&wanted, hosts) {
+                return None;
+            }
+
+            let _kind = fields.next()?;
+            let key = russh::keys::parse_public_key_base64(fields.next()?).ok()?;
+
+            Some(Record {
+                file: file.to_path_buf(),
+                line: at + 1,
+                revoked,
+                key,
+            })
+        })
+        .collect()
+}
+
+fn on_record(host: &str, port: u16, learned: &Path) -> Vec<Record> {
+    let theirs = dirs::home_dir().map(|home| home.join(".ssh").join("known_hosts"));
+
+    theirs
+        .iter()
+        .map(PathBuf::as_path)
+        .chain([learned])
+        .flat_map(|file| records(host, port, file))
+        .collect()
+}
+
+fn family(name: &'static str) -> &'static str {
+    if name.starts_with("rsa-sha2") {
+        "ssh-rsa"
+    } else {
+        name
+    }
+}
+
+// asking only for key types already on record is how openssh avoids a false alarm
+fn host_key_order(host: &str, port: u16) -> Preferred {
+    let Ok(learned) = learned_hosts() else {
+        return Preferred::default();
+    };
+
+    let recorded: Vec<&str> = on_record(host, port, &learned)
+        .iter()
+        .filter(|record| !record.revoked)
+        .map(|record| family(record.key.name()))
+        .collect();
+
+    let usable: Vec<russh::keys::key::Name> = Preferred::DEFAULT
+        .key
+        .iter()
+        .filter(|name| recorded.contains(&family(name.0)))
+        .copied()
+        .collect();
+
+    if usable.is_empty() {
+        return Preferred::default();
+    }
+
+    Preferred {
+        key: Cow::Owned(usable),
+        ..Preferred::default()
+    }
+}
+
+// an unknown jump host is learned into gpql's own file, never into ~/.ssh/known_hosts
+fn trust(host: &str, port: u16, key: &PublicKey) -> Result<bool, String> {
+    let learned = learned_hosts()?;
+    let known = on_record(host, port, &learned);
+
+    if let Some(record) = known
+        .iter()
+        .find(|record| record.revoked && record.key == *key)
+    {
+        return Err(format!(
+            "the host key of {host}:{port} is marked revoked on line {} of {}",
+            record.line,
+            record.file.display()
+        ));
+    }
+
+    if known
+        .iter()
+        .any(|record| !record.revoked && record.key == *key)
+    {
         return Ok(true);
     }
+
+    let kept: Vec<&Record> = known.iter().filter(|record| !record.revoked).collect();
+
+    if let Some(record) = kept
+        .iter()
+        .find(|record| family(record.key.name()) == family(key.name()))
+    {
+        return Err(changed(host, port, key, &record.file, record.line));
+    }
+
+    // russh only compares keys of the same type, so another type used to pass unseen
+    if let Some(record) = kept.first() {
+        return Err(format!(
+            "{host}:{port} offers a {} host key (SHA256:{}), while line {} of {} records only a {} key for it; add the offered key to that file if you trust it",
+            key.name(),
+            key.fingerprint(),
+            record.line,
+            record.file.display(),
+            record.key.name()
+        ));
+    }
+
+    russh::keys::learn_known_hosts_path(host, port, key, &learned).map_err(|error| {
+        format!(
+            "the host key of {host}:{port} could not be recorded in {}: {error}",
+            learned.display()
+        )
+    })?;
+
+    Ok(true)
 }
 
 pub struct Tunnel {
@@ -77,40 +302,81 @@ impl Tunnels {
     }
 
     fn ticket(&self) -> u16 {
-        return self.next.fetch_add(1, Ordering::Relaxed);
+        self.next.fetch_add(1, Ordering::Relaxed)
     }
 }
 
-async fn connect(config: &TunnelConfig) -> Result<Handle<Blind>, String> {
+async fn connect(config: &TunnelConfig) -> Result<Handle<Guard>, String> {
+    let host = config.host.trim().to_string();
     let port: u16 = config.port.trim().parse().unwrap_or(22);
-    let settings = Arc::new(client::Config::default());
-
-    let mut session =
-        client::connect(settings, (config.host.trim(), port), Blind)
-            .await
-            .map_err(|error| format!("ssh: {error}"))?;
-
-    let authed = if config.key_path.trim().is_empty() {
-        session
-            .authenticate_password(config.user.trim(), &config.password)
-            .await
-            .map_err(|error| format!("ssh: {error}"))?
-    } else {
-        let pass = (!config.passphrase.is_empty()).then_some(config.passphrase.as_str());
-        let key = russh::keys::load_secret_key(config.key_path.trim(), pass)
-            .map_err(|error| format!("ssh key: {error}"))?;
-
-        session
-            .authenticate_publickey(config.user.trim(), Arc::new(key))
-            .await
-            .map_err(|error| format!("ssh: {error}"))?
+    let (asked, dialled) = (host.clone(), port);
+    let preferred = tokio::task::spawn_blocking(move || host_key_order(&asked, dialled))
+        .await
+        .unwrap_or_default();
+    let settings = Arc::new(client::Config {
+        keepalive_interval: Some(Duration::from_secs(15)),
+        keepalive_max: 3,
+        inactivity_timeout: Some(Duration::from_secs(90)),
+        preferred,
+        ..Default::default()
+    });
+    let guard = Guard {
+        host: host.clone(),
+        port,
     };
+
+    let mut session = timeout(
+        DIAL_WAIT,
+        client::connect(settings, (host.as_str(), port), guard),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "ssh: {host}:{port} did not answer within {} seconds",
+            DIAL_WAIT.as_secs()
+        )
+    })?
+    .map_err(|refusal| refusal.to_string())?;
+
+    let authed = timeout(AUTH_WAIT, authenticate(&mut session, config))
+        .await
+        .map_err(|_| {
+            format!(
+                "ssh: {host} did not finish signing in within {} seconds",
+                AUTH_WAIT.as_secs()
+            )
+        })??;
 
     if !authed {
         return Err("ssh: the server refused those credentials".into());
     }
 
-    return Ok(session);
+    Ok(session)
+}
+
+async fn authenticate(session: &mut Handle<Guard>, config: &TunnelConfig) -> Result<bool, String> {
+    let user = config.user.trim();
+
+    if config.key_path.trim().is_empty() {
+        return session
+            .authenticate_password(user, &config.password)
+            .await
+            .map_err(|error| format!("ssh: {error}"));
+    }
+
+    let path = config.key_path.trim().to_string();
+    let pass = (!config.passphrase.is_empty()).then(|| config.passphrase.clone());
+
+    let key =
+        tokio::task::spawn_blocking(move || russh::keys::load_secret_key(path, pass.as_deref()))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| format!("ssh key: {error}"))?;
+
+    session
+        .authenticate_publickey(user, Arc::new(key))
+        .await
+        .map_err(|error| format!("ssh: {error}"))
 }
 
 fn taken(port: u16, error: &std::io::Error) -> String {
@@ -118,11 +384,11 @@ fn taken(port: u16, error: &std::io::Error) -> String {
         return error.to_string();
     }
 
-    return format!("port {port} on this machine is already in use: {error}");
+    format!("port {port} on this machine is already in use: {error}")
 }
 
 pub fn free(port: u16) -> bool {
-    return std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
 // binds a loopback port and forwards it over ssh, so every driver keeps
@@ -155,8 +421,10 @@ pub async fn open(
                 accepted = listener.accept() => accepted,
             };
 
+            // one client resetting its socket (WSAECONNRESET) must not end the tunnel
             let Ok((mut socket, _)) = accepted else {
-                return;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
             };
 
             let session = session.clone();
@@ -178,7 +446,41 @@ pub async fn open(
         }
     });
 
-    return Ok(Tunnel { local_port, stop });
+    Ok(Tunnel { local_port, stop })
+}
+
+#[cfg(test)]
+mod known_hosts {
+    use super::*;
+
+    const FIRST: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIKRMCN5DcxTKcPCEgVjf0bf0cX82mRqQBBw8+VwOHcMS";
+    const SECOND: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIJZjMdAczilgiBILn1rz00fHaRU5uSGoDG8+w4yS7qT9";
+
+    #[test]
+    fn every_recorded_key_counts_and_an_unreadable_line_is_skipped() {
+        let file = std::env::temp_dir().join(format!("gpql-known-{}", std::process::id()));
+        let text = format!(
+            "# comment\n\
+             [jump.example]:2222 sk-ssh-ed25519@openssh.com AAAAnotakey\n\
+             |1|hbTB8jLQntyptZ4ENsc8tjbqCFY=|68rcHnV2SnkQFqmFSeFthLr0Tws= ssh-ed25519 {FIRST}\n\
+             other.example ssh-ed25519 {SECOND}\n\
+             @revoked [jump.example]:2222 ssh-ed25519 {SECOND}\n"
+        );
+
+        std::fs::write(&file, text).unwrap();
+
+        let found = records("jump.example", 2222, &file);
+        let other_port = records("jump.example", 22, &file);
+        let _ = std::fs::remove_file(&file);
+
+        let first = russh::keys::parse_public_key_base64(FIRST).unwrap();
+        let second = russh::keys::parse_public_key_base64(SECOND).unwrap();
+
+        assert_eq!(found.len(), 2);
+        assert!(found[0].key == first && !found[0].revoked && found[0].line == 3);
+        assert!(found[1].key == second && found[1].revoked);
+        assert!(other_port.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -200,7 +502,7 @@ mod live {
             local_port: String::new(),
         };
 
-        return Some((config, parts.next()?.parse().ok()?));
+        Some((config, parts.next()?.parse().ok()?))
     }
 
     #[tokio::test]
@@ -228,10 +530,9 @@ mod live {
         let session = crate::engines::db::open(&reached)
             .await
             .expect("postgres refused the tunnelled socket");
-        let counted =
-            crate::engines::db::query(&session, "select count(*) from hop_probe")
-                .await
-                .expect("the query did not come back");
+        let counted = crate::engines::db::query(&session, "select count(*) from hop_probe")
+            .await
+            .expect("the query did not come back");
 
         assert_eq!(counted.rows[0][0].as_deref(), Some("2"));
     }
@@ -289,7 +590,7 @@ mod live_url {
             ..Default::default()
         };
 
-        return Some((hop, config));
+        Some((hop, config))
     }
 
     #[tokio::test]

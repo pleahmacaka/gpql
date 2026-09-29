@@ -1,7 +1,10 @@
-use std::net::TcpStream;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use serde::Serialize;
+use tokio::net::TcpStream;
+use tokio::sync::Semaphore;
+use tokio::time::timeout;
 
 use super::db::{open, query, SessionConfig};
 
@@ -13,6 +16,7 @@ const SHOW_DATABASES: &str = "show databases";
 
 const OPEN_WAIT: Duration = Duration::from_secs(4);
 const QUERY_WAIT: Duration = Duration::from_secs(4);
+const PARALLEL: usize = 8;
 
 const LOCAL_PORTS: &[(&str, u16)] = &[
     ("postgres", 5432),
@@ -53,6 +57,91 @@ struct Target {
     detail: String,
 }
 
+#[derive(Clone)]
+pub struct Key {
+    pub user: String,
+    pub password: String,
+    pub tls: String,
+}
+
+pub struct Saved {
+    pub host: String,
+    pub port: u16,
+    pub key: Key,
+}
+
+#[derive(Default)]
+pub struct Keyring {
+    pub saved: Vec<Saved>,
+    pub presets: Vec<Key>,
+}
+
+impl Key {
+    fn blank(user: &str) -> Self {
+        Key {
+            user: user.to_string(),
+            password: String::new(),
+            tls: String::new(),
+        }
+    }
+}
+
+fn loopback(host: &str) -> bool {
+    let host = host.trim().trim_matches(['[', ']']);
+
+    host.is_empty()
+        || host.eq_ignore_ascii_case("localhost")
+        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+fn same_host(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim()) || (loopback(left) && loopback(right))
+}
+
+impl Keyring {
+    // a saved secret only goes back to the address it was saved for, a preset only to this machine
+    fn keys_for(&self, target: &Target) -> Vec<Key> {
+        let mut keys: Vec<Key> = self
+            .saved
+            .iter()
+            .filter(|saved| saved.port == target.port && same_host(&saved.host, &target.host))
+            .map(|saved| saved.key.clone())
+            .collect();
+
+        if loopback(&target.host) {
+            keys.extend(self.presets.iter().cloned());
+        }
+
+        keys
+    }
+}
+
+fn distinct(keys: impl IntoIterator<Item = Key>) -> Vec<Key> {
+    let mut out: Vec<Key> = Vec::new();
+
+    for key in keys {
+        if !out
+            .iter()
+            .any(|seen| seen.user == key.user && seen.password == key.password)
+        {
+            out.push(key);
+        }
+    }
+
+    out
+}
+
+// these probes speak plain http, where a password travels as readable text
+fn over_plain_http(target: &Target, keys: Vec<Key>) -> Vec<Key> {
+    if loopback(&target.host) {
+        return keys;
+    }
+
+    keys.into_iter()
+        .filter(|key| key.password.is_empty())
+        .collect()
+}
+
 fn discovery(
     target: &Target,
     user: &str,
@@ -60,7 +149,7 @@ fn discovery(
     database: &str,
     needs_login: bool,
 ) -> Discovery {
-    return Discovery {
+    Discovery {
         kind: target.kind.clone(),
         host: target.host.clone(),
         port: target.port.to_string(),
@@ -69,31 +158,41 @@ fn discovery(
         database: database.to_string(),
         detail: target.detail.clone(),
         needs_login,
-    };
+    }
 }
 
-pub fn local_postgres_ports() -> Vec<u16> {
-    return (5432..=5435)
-        .filter(|port| reachable("127.0.0.1", *port, 120))
-        .collect();
+pub async fn local_postgres_ports() -> Vec<u16> {
+    let mut open = Vec::new();
+
+    for port in 5432..=5435 {
+        if reachable("127.0.0.1", port, 120).await {
+            open.push(port);
+        }
+    }
+
+    open
 }
 
-pub fn reachable(host: &str, port: u16, patience: u64) -> bool {
-    use std::net::ToSocketAddrs;
+pub async fn reachable(host: &str, port: u16, patience: u64) -> bool {
+    let patience = Duration::from_millis(patience);
 
-    let Ok(mut addresses) = (host, port).to_socket_addrs() else {
+    let Ok(Ok(addresses)) = timeout(patience, tokio::net::lookup_host((host, port))).await else {
         return false;
     };
 
-    return addresses.any(|address| {
-        TcpStream::connect_timeout(&address, Duration::from_millis(patience)).is_ok()
-    });
+    for address in addresses {
+        if let Ok(Ok(_)) = timeout(patience, TcpStream::connect(address)).await {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn wants_login(error: &str) -> bool {
     let text = error.to_lowercase();
 
-    return [
+    [
         "auth",
         "password",
         "credential",
@@ -104,55 +203,45 @@ fn wants_login(error: &str) -> bool {
         "denied",
     ]
     .iter()
-    .any(|needle| text.contains(needle));
+    .any(|needle| text.contains(needle))
 }
 
-fn probe_config(
-    target: &Target,
-    user: &str,
-    password: &str,
-    database: &str,
-    read_only: bool,
-) -> SessionConfig {
-    return SessionConfig {
+fn probe_config(target: &Target, key: &Key, database: &str, read_only: bool) -> SessionConfig {
+    SessionConfig {
         kind: target.kind.clone(),
         host: target.host.clone(),
         port: target.port.to_string(),
-        user: user.to_string(),
-        password: password.to_string(),
+        user: key.user.clone(),
+        password: key.password.clone(),
         database: database.to_string(),
-        path: String::new(),
         read_only,
-        tls: "prefer".into(),
-        url: String::new(),
-        token: String::new(),
-        warehouse: String::new(),
-        schema: String::new(),
+        tls: if key.tls.is_empty() {
+            "prefer".into()
+        } else {
+            key.tls.clone()
+        },
         ..Default::default()
-    };
+    }
 }
 
 async fn probe_wire(
     target: &Target,
-    candidates: &[(String, String)],
+    keys: &[Key],
     database: &str,
     listing: &str,
     read_only: bool,
     default_user: &str,
 ) -> Vec<Discovery> {
     let mut found = Vec::new();
-    let mut tries = candidates.to_vec();
-
-    tries.push((default_user.to_string(), String::new()));
-    tries.dedup();
+    let tries = distinct(keys.iter().cloned().chain([Key::blank(default_user)]));
 
     let mut reached = false;
     let mut auth_seen = false;
 
-    for (user, password) in &tries {
-        let probe = probe_config(target, user, password, database, read_only);
+    for key in &tries {
+        let probe = probe_config(target, key, database, read_only);
 
-        let session = match tokio::time::timeout(OPEN_WAIT, open(&probe)).await {
+        let session = match timeout(OPEN_WAIT, open(&probe)).await {
             Ok(Ok(session)) => session,
             Ok(Err(error)) => {
                 auth_seen |= wants_login(&error);
@@ -161,8 +250,7 @@ async fn probe_wire(
             Err(_) => continue,
         };
 
-        let Ok(Ok(result)) = tokio::time::timeout(QUERY_WAIT, query(&session, listing)).await
-        else {
+        let Ok(Ok(result)) = timeout(QUERY_WAIT, query(&session, listing)).await else {
             continue;
         };
 
@@ -171,8 +259,8 @@ async fn probe_wire(
         for row in result.rows {
             found.push(discovery(
                 target,
-                user,
-                password,
+                &key.user,
+                &key.password,
                 &row[0].clone().unwrap_or_default(),
                 false,
             ));
@@ -182,18 +270,18 @@ async fn probe_wire(
     }
 
     if !reached && (target.kind == "postgres" || auth_seen) {
-        let user = candidates
+        let user = keys
             .first()
-            .map(|(user, _)| user.clone())
+            .map(|key| key.user.clone())
             .unwrap_or_else(|| default_user.to_string());
 
         found.push(discovery(target, &user, "", "", true));
     }
 
-    return found;
+    found
 }
 
-async fn probe_clickhouse(target: &Target, candidates: &[(String, String)]) -> Vec<Discovery> {
+async fn probe_clickhouse(target: &Target, keys: &[Key]) -> Vec<Discovery> {
     let base = format!("http://{}:{}", target.host, target.port);
 
     let Ok(client) = reqwest::Client::builder().timeout(QUERY_WAIT).build() else {
@@ -208,11 +296,16 @@ async fn probe_clickhouse(target: &Target, candidates: &[(String, String)]) -> V
         return Vec::new();
     }
 
-    let mut tries = vec![("default".to_string(), String::new())];
-    tries.extend(candidates.iter().cloned());
-    tries.dedup();
+    let tries = over_plain_http(
+        target,
+        distinct(
+            [Key::blank("default")]
+                .into_iter()
+                .chain(keys.iter().cloned()),
+        ),
+    );
 
-    for (user, password) in tries {
+    for Key { user, password, .. } in tries {
         let answer = client
             .post(&base)
             .header("X-ClickHouse-User", &user)
@@ -244,11 +337,11 @@ async fn probe_clickhouse(target: &Target, candidates: &[(String, String)]) -> V
         }
     }
 
-    return vec![discovery(target, "default", "", "", true)];
+    vec![discovery(target, "default", "", "", true)]
 }
 
 async fn probe_mqtt(target: &Target) -> Vec<Discovery> {
-    let probe = probe_config(target, "", "", "#", false);
+    let probe = probe_config(target, &Key::blank(""), "#", false);
 
     return match tokio::time::timeout(OPEN_WAIT, open(&probe)).await {
         Ok(Ok(_)) => vec![discovery(target, "", "", "#", false)],
@@ -282,18 +375,18 @@ async fn probe_falkordb(target: &Target) -> Vec<Discovery> {
     let ping: Result<String, redis::RedisError> =
         redis::cmd("PING").query_async(&mut connection).await;
 
-    return match ping {
+    match ping {
         Ok(_) => vec![discovery(target, "", "", "falkordb", false)],
         Err(error) if wants_login(&error.to_string()) => {
             vec![discovery(target, "", "", "", true)]
         }
         Err(_) => Vec::new(),
-    };
+    }
 }
 
 // an open port alone proves nothing, so the endpoint has to answer like s3:
 // its own error codes, a server banner, or localstack's health json
-async fn probe_s3(target: &Target, candidates: &[(String, String)]) -> Vec<Discovery> {
+async fn probe_s3(target: &Target, keys: &[Key]) -> Vec<Discovery> {
     let base = format!("http://{}:{}", target.host, target.port);
 
     let Ok(client) = reqwest::Client::builder().timeout(QUERY_WAIT).build() else {
@@ -332,11 +425,7 @@ async fn probe_s3(target: &Target, candidates: &[(String, String)]) -> Vec<Disco
             .await
         {
             if health.status().is_success() {
-                looks_s3 = health
-                    .text()
-                    .await
-                    .unwrap_or_default()
-                    .contains("\"s3\"");
+                looks_s3 = health.text().await.unwrap_or_default().contains("\"s3\"");
             }
         }
     }
@@ -345,50 +434,38 @@ async fn probe_s3(target: &Target, candidates: &[(String, String)]) -> Vec<Disco
         return Vec::new();
     }
 
-    let mut tries: Vec<(String, String)> = candidates.to_vec();
-    tries.push(("minioadmin".to_string(), "minioadmin".to_string()));
-    tries.push((String::new(), String::new()));
-    tries.dedup();
+    let minio = Key {
+        password: "minioadmin".into(),
+        ..Key::blank("minioadmin")
+    };
+    let tries = over_plain_http(
+        target,
+        distinct(keys.iter().cloned().chain([minio, Key::blank("")])),
+    );
 
-    for (user, password) in tries {
-        let mut probe = probe_config(target, &user, &password, "", false);
+    for key in tries {
+        let mut probe = probe_config(target, &key, "", false);
         probe.url = base.clone();
 
-        let Ok(Ok(session)) = tokio::time::timeout(OPEN_WAIT, open(&probe)).await
-        else {
+        let Ok(Ok(session)) = timeout(OPEN_WAIT, open(&probe)).await else {
             continue;
         };
 
-        let Ok(Ok(result)) = tokio::time::timeout(QUERY_WAIT, query(&session, "ls")).await
-        else {
-            continue;
-        };
-
-        let _ = result;
-
-        return vec![discovery(target, &user, &password, "", false)];
+        if let Ok(Ok(_)) = timeout(QUERY_WAIT, query(&session, "ls")).await {
+            return vec![discovery(target, &key.user, &key.password, "", false)];
+        }
     }
 
-    return vec![discovery(target, "", "", "", true)];
+    vec![discovery(target, "", "", "", true)]
 }
 
-async fn probe(target: &Target, candidates: &[(String, String)]) -> Vec<Discovery> {
-    return match target.kind.as_str() {
-        "postgres" => {
-            probe_wire(
-                target,
-                candidates,
-                "postgres",
-                PG_DATABASES,
-                true,
-                "postgres",
-            )
-            .await
-        }
+async fn probe(target: &Target, keys: &[Key]) -> Vec<Discovery> {
+    match target.kind.as_str() {
+        "postgres" => probe_wire(target, keys, "postgres", PG_DATABASES, true, "postgres").await,
         "mysql" => {
             probe_wire(
                 target,
-                candidates,
+                keys,
                 "information_schema",
                 SHOW_DATABASES,
                 false,
@@ -396,58 +473,50 @@ async fn probe(target: &Target, candidates: &[(String, String)]) -> Vec<Discover
             )
             .await
         }
-        "greptimedb" => {
-            probe_wire(
-                target,
-                candidates,
-                "public",
-                SHOW_DATABASES,
-                false,
-                "greptime",
-            )
-            .await
-        }
-        "clickhouse" => probe_clickhouse(target, candidates).await,
+        "greptimedb" => probe_wire(target, keys, "public", SHOW_DATABASES, false, "greptime").await,
+        "clickhouse" => probe_clickhouse(target, keys).await,
         "mqtt" => probe_mqtt(target).await,
-        "s3" => probe_s3(target, candidates).await,
+        "s3" => probe_s3(target, keys).await,
         "falkordb" => probe_falkordb(target).await,
         "influxdb2" | "influxdb" => vec![discovery(target, "", "", "", true)],
         "neo4j" => vec![discovery(target, "neo4j", "", "", true)],
         _ => Vec::new(),
-    };
+    }
 }
 
-pub async fn scan_host(
-    host: &str,
-    ports: &[u16],
-    candidates: &[(String, String)],
-) -> Vec<Discovery> {
-    let mut found = Vec::new();
+async fn probe_all(targets: &[Target], keyring: &Keyring, patience: u64) -> Vec<Discovery> {
+    let gate = Semaphore::new(PARALLEL);
 
-    for port in ports.iter().copied() {
-        let target = Target {
-            kind: "postgres".into(),
-            host: host.to_string(),
-            port,
-            detail: String::new(),
+    let probed = futures_util::future::join_all(targets.iter().map(|target| async {
+        let Ok(_turn) = gate.acquire().await else {
+            return Vec::new();
         };
 
-        if reachable(host, port, 200) {
-            found.extend(
-                probe_wire(
-                    &target,
-                    candidates,
-                    "postgres",
-                    PG_DATABASES,
-                    true,
-                    "postgres",
-                )
-                .await,
-            );
+        if !reachable(&target.host, target.port, patience).await {
+            return Vec::new();
         }
-    }
 
-    return found;
+        probe(target, &keyring.keys_for(target)).await
+    }))
+    .await;
+
+    probed.into_iter().flatten().collect()
+}
+
+pub async fn scan_hosts(hosts: &[String], ports: &[u16], keyring: &Keyring) -> Vec<Discovery> {
+    let targets: Vec<Target> = hosts
+        .iter()
+        .flat_map(|host| {
+            ports.iter().map(|port| Target {
+                kind: "postgres".into(),
+                host: host.clone(),
+                port: *port,
+                detail: String::new(),
+            })
+        })
+        .collect();
+
+    probe_all(&targets, keyring, 200).await
 }
 
 fn image_kind(image: &str) -> Option<&'static str> {
@@ -462,7 +531,7 @@ fn image_kind(image: &str) -> Option<&'static str> {
         return None;
     }
 
-    return Some(match name.as_str() {
+    Some(match name.as_str() {
         _ if name.starts_with("postgres")
             || name.starts_with("postgis")
             || name.starts_with("timescale") =>
@@ -489,24 +558,18 @@ fn image_kind(image: &str) -> Option<&'static str> {
         {
             "mqtt"
         }
-        _ if [
-            "minio",
-            "localstack",
-            "rustfs",
-            "seaweedfs",
-            "garage",
-        ]
-        .iter()
-        .any(|prefix| name.starts_with(prefix)) =>
+        _ if ["minio", "localstack", "rustfs", "seaweedfs", "garage"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix)) =>
         {
             "s3"
         }
         _ => return None,
-    });
+    })
 }
 
 fn serves(kind: &str, container_port: u16) -> bool {
-    return match kind {
+    match kind {
         "postgres" => container_port == 5432,
         "mysql" => container_port == 3306,
         "falkordb" => container_port == 6379,
@@ -518,7 +581,7 @@ fn serves(kind: &str, container_port: u16) -> bool {
         "mqtt" => matches!(container_port, 1883 | 8883 | 8884),
         "s3" => matches!(container_port, 9000 | 8333 | 3900 | 4566 | 7480),
         _ => false,
-    };
+    }
 }
 
 fn published(field: &str) -> Vec<(String, u16, u16)> {
@@ -554,7 +617,7 @@ fn published(field: &str) -> Vec<(String, u16, u16)> {
         out.push((host, port, container_port));
     }
 
-    return out;
+    out
 }
 
 fn parse_ps(output: &str) -> Vec<Target> {
@@ -586,7 +649,7 @@ fn parse_ps(output: &str) -> Vec<Target> {
         }
     }
 
-    return targets;
+    targets
 }
 
 fn docker_ps() -> Option<String> {
@@ -626,14 +689,14 @@ fn docker_ps() -> Option<String> {
         return None;
     }
 
-    return String::from_utf8(output.stdout).ok();
+    String::from_utf8(output.stdout).ok()
 }
 
-pub async fn scan(candidates: &[(String, String)]) -> Vec<Discovery> {
+pub async fn scan(keyring: &Keyring) -> Vec<Discovery> {
     let mut targets = tokio::task::spawn_blocking(|| {
-        return docker_ps()
+        docker_ps()
             .map(|output| parse_ps(&output))
-            .unwrap_or_default();
+            .unwrap_or_default()
     })
     .await
     .unwrap_or_default();
@@ -654,17 +717,7 @@ pub async fn scan(candidates: &[(String, String)]) -> Vec<Discovery> {
         });
     }
 
-    let mut found = Vec::new();
-
-    for target in &targets {
-        if !reachable(&target.host, target.port, 300) {
-            continue;
-        }
-
-        found.extend(probe(target, candidates).await);
-    }
-
-    return found;
+    probe_all(&targets, keyring, 300).await
 }
 
 #[cfg(test)]
@@ -788,8 +841,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_running_mqtt_broker_is_found() {
-        if std::process::Command::new("nanomq")
-            .arg("--help")
+        if std::process::Command::new("mosquitto")
+            .arg("-h")
             .output()
             .is_err()
         {
@@ -798,36 +851,40 @@ mod tests {
         if crate::engines::backends::find("mqtt").is_none() {
             return;
         }
-        if reachable("127.0.0.1", 1883, 100) {
+        if reachable("127.0.0.1", 1883, 100).await {
             return;
         }
 
         let mut broker = Broker(
-            std::process::Command::new("nanomq")
-                .args(["start", "--port", "1883"])
+            std::process::Command::new("mosquitto")
+                .args(["-p", "1883"])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
-                .expect("nanomq should start"),
+                .expect("mosquitto should start"),
         );
 
         let mut up = false;
 
         for _ in 0..50 {
-            if reachable("127.0.0.1", 1883, 100) {
+            if reachable("127.0.0.1", 1883, 100).await {
                 up = true;
                 break;
             }
-            std::thread::sleep(Duration::from_millis(100));
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        let found = if up { scan(&[]).await } else { Vec::new() };
+        let found = if up {
+            scan(&Keyring::default()).await
+        } else {
+            Vec::new()
+        };
 
         broker.0.kill().ok();
         drop(broker);
 
-        assert!(up, "nanomq never opened its port");
+        assert!(up, "mosquitto never opened its port");
         assert!(
             found
                 .iter()

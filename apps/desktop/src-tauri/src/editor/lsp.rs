@@ -1,17 +1,22 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Stdio;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{Mutex, oneshot};
-use tokio::time::{Duration, timeout};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::time::{timeout, Duration};
 
 const DOCUMENT: &str = "file:///gpql/query";
+const WAKING: Duration = Duration::from_secs(10);
 const PATIENCE: Duration = Duration::from_millis(1500);
+const LARGEST_MESSAGE: usize = 64 * 1024 * 1024;
+
+type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -21,26 +26,43 @@ pub struct Completion {
     pub kind: i64,
 }
 
+type Process = Arc<std::sync::Mutex<Child>>;
+
 struct Server {
-    child: Child,
-    stdin: ChildStdin,
+    child: Process,
+    outbox: mpsc::Sender<Value>,
     next: AtomicI64,
     version: AtomicI64,
-    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
+    pending: Pending,
 }
 
 #[derive(Default)]
 pub struct Servers {
-    running: Mutex<HashMap<String, Server>>,
+    running: Mutex<HashMap<String, Arc<Server>>>,
+}
+
+fn launchable(program: &str) -> Result<&str, String> {
+    let program = program.trim();
+
+    if program.is_empty() || program.chars().any(char::is_control) {
+        return Err("name the language server program to start".into());
+    }
+
+    let path = Path::new(program);
+
+    if !path.is_absolute() && path.components().count() > 1 {
+        return Err(format!(
+            "{program} is a relative path; give its full path or a program name on PATH"
+        ));
+    }
+
+    Ok(program)
 }
 
 impl Servers {
-    pub async fn start(
-        &self,
-        dialect: &str,
-        program: &str,
-        args: &[String],
-    ) -> Result<(), String> {
+    pub async fn start(&self, dialect: &str, program: &str, args: &[String]) -> Result<(), String> {
+        let program = launchable(program)?;
+
         self.stop(dialect).await;
 
         let mut command = Command::new(program);
@@ -48,22 +70,28 @@ impl Servers {
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
 
         #[cfg(windows)]
         command.creation_flags(0x0800_0000);
 
-        let mut child = command.spawn().map_err(|error| error.to_string())?;
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("{program}: {error}"))?;
         let stdin = child.stdin.take().ok_or("the server took no input")?;
         let stdout = child.stdout.take().ok_or("the server gave no output")?;
 
-        let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        listen(stdout, pending.clone());
+        let pending = Pending::default();
+        let (outbox, queue) = mpsc::channel(64);
+        let child: Process = Arc::new(std::sync::Mutex::new(child));
 
-        let mut server = Server {
+        write(stdin, queue);
+        listen(stdout, pending.clone(), outbox.clone(), Arc::clone(&child));
+
+        let server = Server {
             child,
-            stdin,
+            outbox,
             next: AtomicI64::new(1),
             version: AtomicI64::new(1),
             pending,
@@ -81,6 +109,7 @@ impl Servers {
                         }
                     },
                 }),
+                WAKING,
             )
             .await?;
 
@@ -99,30 +128,44 @@ impl Servers {
             )
             .await?;
 
-        self.running.lock().await.insert(dialect.to_string(), server);
+        let replaced = self
+            .running
+            .lock()
+            .await
+            .insert(dialect.to_string(), Arc::new(server));
 
-        return Ok(());
+        if let Some(replaced) = replaced {
+            replaced.kill();
+        }
+
+        Ok(())
     }
 
     pub async fn stop(&self, dialect: &str) {
-        if let Some(mut server) = self.running.lock().await.remove(dialect) {
-            let _ = server.child.kill().await;
+        let removed = self.running.lock().await.remove(dialect);
+
+        if let Some(server) = removed {
+            server.kill();
         }
     }
 
     pub async fn running(&self) -> Vec<String> {
-        return self.running.lock().await.keys().cloned().collect();
+        self.running.lock().await.keys().cloned().collect()
+    }
+
+    async fn get(&self, dialect: &str) -> Option<Arc<Server>> {
+        self.running.lock().await.get(dialect).cloned()
     }
 
     pub async fn sync(&self, dialect: &str, text: &str) -> Result<(), String> {
-        let mut running = self.running.lock().await;
-        let Some(server) = running.get_mut(dialect) else {
-            return Err("no language server for that dialect".into());
-        };
+        let server = self
+            .get(dialect)
+            .await
+            .ok_or("no language server for that dialect")?;
 
         let version = server.version.fetch_add(1, Ordering::Relaxed) + 1;
 
-        return server
+        server
             .notify(
                 "textDocument/didChange",
                 json!({
@@ -130,7 +173,7 @@ impl Servers {
                     "contentChanges": [{ "text": text }],
                 }),
             )
-            .await;
+            .await
     }
 
     pub async fn complete(
@@ -139,8 +182,7 @@ impl Servers {
         line: u32,
         character: u32,
     ) -> Result<Vec<Completion>, String> {
-        let mut running = self.running.lock().await;
-        let Some(server) = running.get_mut(dialect) else {
+        let Some(server) = self.get(dialect).await else {
             return Ok(Vec::new());
         };
 
@@ -151,6 +193,7 @@ impl Servers {
                     "textDocument": { "uri": DOCUMENT },
                     "position": { "line": line, "character": character },
                 }),
+                PATIENCE,
             )
             .await?;
 
@@ -161,7 +204,7 @@ impl Servers {
             .cloned()
             .unwrap_or_default();
 
-        return Ok(items
+        Ok(items
             .iter()
             .filter_map(|item| {
                 Some(Completion {
@@ -175,58 +218,109 @@ impl Servers {
                 })
             })
             .take(50)
-            .collect());
+            .collect())
+    }
+}
+
+fn kill(child: &Process) {
+    if let Ok(mut child) = child.lock() {
+        let _ = child.start_kill();
     }
 }
 
 impl Server {
-    async fn send(&mut self, payload: Value) -> Result<(), String> {
-        let body = payload.to_string();
-        let framed = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+    fn kill(&self) {
+        kill(&self.child);
+    }
 
-        return self
-            .stdin
-            .write_all(framed.as_bytes())
+    async fn notify(&self, method: &str, params: Value) -> Result<(), String> {
+        let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+
+        timeout(PATIENCE, self.outbox.send(message))
             .await
-            .map_err(|error| error.to_string());
+            .map_err(|_| format!("{method} timed out"))?
+            .map_err(|_| "the language server went away".to_string())
     }
 
-    async fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
-        return self
-            .send(json!({ "jsonrpc": "2.0", "method": method, "params": params }))
-            .await;
-    }
-
-    async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        patience: Duration,
+    ) -> Result<Value, String> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();
 
         self.pending.lock().await.insert(id, sender);
-        self.send(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        }))
-        .await?;
 
-        let answer = timeout(PATIENCE, receiver)
-            .await
-            .map_err(|_| format!("{method} timed out"))?
-            .map_err(|_| "the language server went away".to_string())?;
+        let asked = async {
+            self.outbox
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "method": method,
+                    "params": params,
+                }))
+                .await
+                .map_err(|_| "the language server went away".to_string())?;
+
+            receiver
+                .await
+                .map_err(|_| "the language server went away".to_string())
+        };
+
+        let answer = timeout(patience, asked).await;
+
+        if !matches!(answer, Ok(Ok(_))) {
+            self.pending.lock().await.remove(&id);
+        }
+
+        let answer = answer.map_err(|_| format!("{method} timed out"))??;
 
         if let Some(message) = answer.pointer("/error/message").and_then(Value::as_str) {
             return Err(message.to_string());
         }
 
-        return Ok(answer.get("result").cloned().unwrap_or(Value::Null));
+        Ok(answer.get("result").cloned().unwrap_or(Value::Null))
     }
 }
 
-fn listen(
-    stdout: tokio::process::ChildStdout,
-    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>,
-) {
+fn write(mut stdin: ChildStdin, mut queue: mpsc::Receiver<Value>) {
+    tokio::spawn(async move {
+        while let Some(payload) = queue.recv().await {
+            let body = payload.to_string();
+            let framed = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+
+            if stdin.write_all(framed.as_bytes()).await.is_err() {
+                return;
+            }
+        }
+    });
+}
+
+fn answer_to(method: &str, id: Value, params: Option<&Value>) -> Value {
+    match method {
+        "workspace/configuration" => {
+            let asked = params
+                .and_then(|params| params.get("items"))
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+
+            json!({ "jsonrpc": "2.0", "id": id, "result": vec![Value::Null; asked] })
+        }
+        "client/registerCapability"
+        | "client/unregisterCapability"
+        | "window/workDoneProgress/create"
+        | "window/showMessageRequest" => json!({ "jsonrpc": "2.0", "id": id, "result": null }),
+        _ => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32601, "message": format!("gpql does not handle {method}") },
+        }),
+    }
+}
+
+fn listen(stdout: ChildStdout, pending: Pending, outbox: mpsc::Sender<Value>, child: Process) {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout);
 
@@ -237,6 +331,8 @@ fn listen(
                 let mut header = String::new();
 
                 if reader.read_line(&mut header).await.unwrap_or(0) == 0 {
+                    pending.lock().await.clear();
+
                     return;
                 }
 
@@ -255,9 +351,18 @@ fn listen(
                 continue;
             }
 
+            if length > LARGEST_MESSAGE {
+                pending.lock().await.clear();
+                kill(&child);
+
+                return;
+            }
+
             let mut body = vec![0u8; length];
 
             if reader.read_exact(&mut body).await.is_err() {
+                pending.lock().await.clear();
+
                 return;
             }
 
@@ -265,14 +370,19 @@ fn listen(
                 continue;
             };
 
-            if let Some(id) = message.get("id").and_then(Value::as_i64) {
-                if let Some(sender) = pending.lock().await.remove(&id) {
-                    let _ = sender.send(message);
+            if let Some(method) = message.get("method").and_then(Value::as_str) {
+                if let Some(id) = message.get("id") {
+                    let _ = outbox.try_send(answer_to(method, id.clone(), message.get("params")));
                 }
 
                 continue;
             }
+
+            if let Some(id) = message.get("id").and_then(Value::as_i64) {
+                if let Some(sender) = pending.lock().await.remove(&id) {
+                    let _ = sender.send(message);
+                }
+            }
         }
     });
 }
-

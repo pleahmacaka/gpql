@@ -40,10 +40,10 @@ impl Grammar {
 
         let query = Query::new(&language, highlights).map_err(|error| error.to_string())?;
 
-        return Ok(Grammar {
+        Ok(Grammar {
             parser: Mutex::new(parser),
             query,
-        });
+        })
     }
 
     fn fault(&self, source: &str) -> Option<Fault> {
@@ -76,7 +76,7 @@ impl Grammar {
             }
         }
 
-        return None;
+        None
     }
 
     fn tokens(&self, source: &str) -> Vec<Token> {
@@ -90,30 +90,31 @@ impl Grammar {
         let names = self.query.capture_names();
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&self.query, tree.root_node(), source.as_bytes());
-        let mut tokens: Vec<Token> = Vec::new();
+        let mut latest: HashMap<(usize, usize), &str> = HashMap::new();
 
         while let Some(found) = matches.next() {
             for capture in found.captures {
                 let span = capture.node.byte_range();
-                let kind = names[capture.index as usize];
 
-                if span.start >= span.end {
-                    continue;
+                if span.start < span.end {
+                    latest.insert((span.start, span.end), names[capture.index as usize]);
                 }
-
-                tokens.retain(|token| token.start != span.start || token.end != span.end);
-                tokens.push(Token {
-                    start: span.start,
-                    end: span.end,
-                    kind: kind.split('.').next().unwrap_or(kind).to_string(),
-                });
             }
         }
+
+        let mut tokens: Vec<Token> = latest
+            .into_iter()
+            .map(|((start, end), kind)| Token {
+                start,
+                end,
+                kind: kind.split('.').next().unwrap_or(kind).to_string(),
+            })
+            .collect();
 
         tokens.sort_by_key(|token| (token.start, token.end));
         tokens.dedup_by(|later, earlier| later.start < earlier.end);
 
-        return tokens;
+        tokens
     }
 }
 
@@ -137,11 +138,11 @@ impl Highlighter {
             )?,
         );
 
-        return Ok(Highlighter { grammars });
+        Ok(Highlighter { grammars })
     }
 
     pub fn fault(&self, dialect: &str, source: &str) -> Option<Fault> {
-        return self.grammars.get(dialect)?.fault(source);
+        self.grammars.get(dialect)?.fault(source)
     }
 
     pub fn tokens(&self, dialect: &str, source: &str) -> Vec<Token> {
@@ -150,7 +151,9 @@ impl Highlighter {
             .get(dialect)
             .or_else(|| self.grammars.get("sql"));
 
-        return grammar.map(|found| found.tokens(source)).unwrap_or_default();
+        grammar
+            .map(|found| found.tokens(source))
+            .unwrap_or_default()
     }
 }
 
@@ -162,7 +165,9 @@ mod reading {
     fn spots_broken_sql() {
         let reader = Highlighter::new().unwrap();
 
-        assert!(reader.fault("sql", "select * from users where id = 1").is_none());
+        assert!(reader
+            .fault("sql", "select * from users where id = 1")
+            .is_none());
         assert!(reader.fault("sql", "select from where )(").is_some());
     }
 }

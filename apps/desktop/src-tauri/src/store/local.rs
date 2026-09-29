@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use rusqlite::types::{ToSqlOutput, Value, ValueRef};
-use rusqlite::{Connection, params_from_iter};
+use rusqlite::{params_from_iter, Connection};
 use serde_json::{Number, Value as Json};
 
 pub struct Local(pub Mutex<Connection>);
@@ -19,7 +19,7 @@ impl Local {
             .execute_batch("pragma journal_mode = wal; pragma foreign_keys = on;")
             .map_err(|e| e.to_string())?;
 
-        return Ok(Local(Mutex::new(connection)));
+        Ok(Local(Mutex::new(connection)))
     }
 }
 
@@ -36,14 +36,16 @@ fn to_sql(value: &Json) -> ToSqlOutput<'static> {
         other => Value::Text(other.to_string()),
     };
 
-    return ToSqlOutput::Owned(mapped);
+    ToSqlOutput::Owned(mapped)
 }
 
 fn to_json(value: ValueRef<'_>) -> Json {
     match value {
         ValueRef::Null => Json::Null,
         ValueRef::Integer(number) => Json::Number(number.into()),
-        ValueRef::Real(number) => Number::from_f64(number).map(Json::Number).unwrap_or(Json::Null),
+        ValueRef::Real(number) => Number::from_f64(number)
+            .map(Json::Number)
+            .unwrap_or(Json::Null),
         ValueRef::Text(bytes) => Json::String(String::from_utf8_lossy(bytes).into_owned()),
         ValueRef::Blob(bytes) => Json::String(String::from_utf8_lossy(bytes).into_owned()),
     }
@@ -79,11 +81,11 @@ pub fn run(local: &Local, sql: &str, params: &[Json]) -> Result<Vec<Vec<Json>>, 
         rows.push(values);
     }
 
-    return Ok(rows);
+    Ok(rows)
 }
 
 pub fn batch(local: &Local, sql: &str) -> Result<(), String> {
     let connection = local.0.lock().unwrap();
 
-    return connection.execute_batch(sql).map_err(|e| e.to_string());
+    connection.execute_batch(sql).map_err(|e| e.to_string())
 }

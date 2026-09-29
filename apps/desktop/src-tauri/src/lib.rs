@@ -3,6 +3,11 @@ mod engines;
 mod net;
 mod store;
 
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
 use crate::editor::highlight;
 use crate::editor::lsp;
 use crate::engines::backends;
@@ -27,14 +32,100 @@ use highlight::{Highlighter, Token};
 use local::Local;
 use lsp::{Completion, Servers};
 use serde_json::Value as Json;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use vault::{Credential, Provider, SavedLogin};
+
+async fn off_thread<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+type Stops = HashMap<u64, tokio::sync::oneshot::Sender<()>>;
+
+#[derive(Default)]
+struct Busy {
+    next: AtomicU64,
+    running: Mutex<HashMap<String, Stops>>,
+}
+
+struct Ticket<'a> {
+    busy: &'a Busy,
+    session: String,
+    number: u64,
+}
+
+impl Drop for Ticket<'_> {
+    fn drop(&mut self) {
+        let mut running = self.busy.held();
+
+        if let Some(stops) = running.get_mut(&self.session) {
+            stops.remove(&self.number);
+
+            if stops.is_empty() {
+                running.remove(&self.session);
+            }
+        }
+    }
+}
+
+impl Busy {
+    fn held(&self) -> MutexGuard<'_, HashMap<String, Stops>> {
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    async fn watch<T>(
+        &self,
+        session: &str,
+        work: impl Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        let number = self.next.fetch_add(1, Ordering::Relaxed);
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+
+        self.held()
+            .entry(session.to_string())
+            .or_default()
+            .insert(number, stop);
+
+        let _ticket = Ticket {
+            busy: self,
+            session: session.to_string(),
+            number,
+        };
+
+        tokio::select! {
+            outcome = work => outcome,
+            Ok(()) = stopped => Err("the query was stopped".to_string()),
+        }
+    }
+
+    fn running(&self, session: &str) -> bool {
+        self.held().contains_key(session)
+    }
+
+    fn stop(&self, session: &str) -> bool {
+        let stops = self.held().remove(session).unwrap_or_default();
+        let stopped = !stops.is_empty();
+
+        for stop in stops.into_values() {
+            let _ = stop.send(());
+        }
+
+        stopped
+    }
+}
 
 #[tauri::command]
 async fn check(config: SessionConfig, tunnels: State<'_, Tunnels>) -> Result<String, String> {
+    let mut asked = config.clone();
+
+    asked.create = false;
+
     // the probe has to take the same route the connection will, or it reports
     // on a server the driver is never going to reach
-    let (reached, _hop) = through(&config, &tunnels).await?;
+    let (reached, _hop) = through(&asked, &tunnels).await?;
     let session = db::open(&reached).await?;
 
     let probe = match (config.kind.as_str(), backends::dialect_of(&config.kind)) {
@@ -55,6 +146,7 @@ async fn check(config: SessionConfig, tunnels: State<'_, Tunnels>) -> Result<Str
 
             return Ok(format!("{} topics", listed.len()));
         }
+        ("s3", _) => "ls",
         ("clickhouse", _) => "select version()",
         ("snowflake", _) => "select current_version()",
         ("influxdb", _) => "select 1",
@@ -64,11 +156,11 @@ async fn check(config: SessionConfig, tunnels: State<'_, Tunnels>) -> Result<Str
 
     let result = db::query(&session, probe).await?;
 
-    return Ok(result
+    Ok(result
         .rows
         .first()
         .and_then(|row| row.first().cloned().flatten())
-        .unwrap_or_else(|| "reachable".into()));
+        .unwrap_or_else(|| "reachable".into()))
 }
 
 // the driver is pointed at a loopback port and never learns there is a jump
@@ -81,12 +173,12 @@ async fn through(
         return Ok((config.clone(), None));
     }
 
-    let mut reached = config.clone();
+    let mut reached = db::flavoured(config);
 
     // a url backend carries its address inside the url, so the hop is dialled
     // from there and the url is rewritten to the loopback port
-    if !config.url.trim().is_empty() {
-        let mut address = url::Url::parse(config.url.trim())
+    if !reached.url.trim().is_empty() {
+        let mut address = url::Url::parse(reached.url.trim())
             .map_err(|error| format!("that URL cannot be read: {error}"))?;
         let host = address
             .host_str()
@@ -110,22 +202,30 @@ async fn through(
         return Ok((reached, Some(hop)));
     }
 
-    let target = if config.host.trim().is_empty() {
-        "127.0.0.1"
+    let target = if reached.host.trim().is_empty() {
+        "127.0.0.1".to_string()
     } else {
-        config.host.trim()
+        reached.host.trim().to_string()
     };
-    let port = config.port.trim().parse().unwrap_or_else(|_| {
-        crate::backends::find(&config.kind)
+    let port = reached.port.trim().parse().unwrap_or_else(|_| {
+        crate::backends::find(&reached.kind)
             .and_then(|backend| backend.port.parse().ok())
             .unwrap_or(5432)
     });
-    let hop = tunnel::open(tunnels, &config.tunnel, target, port).await?;
+    let hop = tunnel::open(tunnels, &reached.tunnel, &target, port).await?;
 
-    reached.host = "127.0.0.1".into();
+    // tls still checks the certificate against the real host name, so only the dialled address changes
+    match backends::transport_of(&reached.kind) {
+        backends::Transport::Postgres | backends::Transport::MySql => {
+            reached.host = target;
+            reached.dial = "127.0.0.1".into();
+        }
+        _ => reached.host = "127.0.0.1".into(),
+    }
+
     reached.port = hop.local_port.to_string();
 
-    return Ok((reached, Some(hop)));
+    Ok((reached, Some(hop)))
 }
 
 #[derive(serde::Deserialize)]
@@ -137,7 +237,7 @@ struct Waypoint {
 
 #[tauri::command]
 async fn probe_recents(items: Vec<Waypoint>) -> Vec<String> {
-    let logins = vault::list();
+    let logins = off_thread(vault::list).await.unwrap_or_default();
 
     let checks = items.into_iter().map(|item| {
         if item.kind == "erd" {
@@ -155,6 +255,14 @@ async fn probe_recents(items: Vec<Waypoint>) -> Vec<String> {
 
         if !login.path.is_empty() {
             return Some(Look::File(login.path.clone()));
+        }
+
+        // only the jump host can be reached from here; the server behind it is not probed
+        if login.tunnel.wanted() {
+            return Some(Look::Port(
+                login.tunnel.host.trim().to_string(),
+                login.tunnel.port.trim().parse().unwrap_or(22),
+            ));
         }
 
         if login.endpoint.is_empty() {
@@ -175,35 +283,27 @@ async fn probe_recents(items: Vec<Waypoint>) -> Vec<String> {
             .map(|(host, port)| Look::Port(host, port));
         }
 
-        return address_of(&login.endpoint).map(|(host, port)| Look::Port(host, port));
+        address_of(&login.endpoint).map(|(host, port)| Look::Port(host, port))
     });
 
-    let answers = checks.map(|check| {
-        tokio::task::spawn_blocking(move || match check {
+    let answers = checks.map(|check| async move {
+        match check {
             None => String::new(),
-            Some(Look::File(path)) => missing_file(&path),
-            Some(Look::Port(host, port)) if host.is_empty() => {
-                let _ = port;
-
-                String::new()
-            }
+            Some(Look::File(path)) => off_thread(move || Ok(missing_file(&path)))
+                .await
+                .unwrap_or_default(),
+            Some(Look::Port(host, _)) if host.is_empty() => String::new(),
             Some(Look::Port(host, port)) => {
-                if discovery::reachable(&host, port, 400) {
+                if discovery::reachable(&host, port, 400).await {
                     String::new()
                 } else {
                     "down".to_string()
                 }
             }
-        })
+        }
     });
 
-    let mut out = Vec::new();
-
-    for answer in answers.collect::<Vec<_>>() {
-        out.push(answer.await.unwrap_or_default());
-    }
-
-    return out;
+    futures_util::future::join_all(answers).await
 }
 
 enum Look {
@@ -212,10 +312,10 @@ enum Look {
 }
 
 fn tail(url: &str) -> &str {
-    return match url.find("://") {
+    match url.find("://") {
         Some(at) => &url[at + 3..],
         None => url,
-    };
+    }
 }
 
 fn missing_file(path: &str) -> String {
@@ -223,7 +323,7 @@ fn missing_file(path: &str) -> String {
         return String::new();
     }
 
-    return "gone".to_string();
+    "gone".to_string()
 }
 
 fn address_of(endpoint: &str) -> Option<(String, u16)> {
@@ -239,19 +339,28 @@ fn address_of(endpoint: &str) -> Option<(String, u16)> {
         }
     }
 
-    return Some((host.to_string(), if secure { 443 } else { 80 }));
+    Some((host.to_string(), if secure { 443 } else { 80 }))
 }
 
 #[tauri::command]
-async fn databases(config: SessionConfig) -> Result<Vec<String>, String> {
+async fn databases(
+    config: SessionConfig,
+    tunnels: State<'_, Tunnels>,
+) -> Result<Vec<String>, String> {
     use crate::backends::Transport;
 
     if config.kind == "supabase_api" {
         return supabase_projects(&config.token).await;
     }
 
+    let mut probing = config.clone();
+
+    probing.read_only = true;
+    probing.create = false;
+
     if config.kind == "influxdb2" {
-        let session = db::open(&config).await?;
+        let (reached, _hop) = through(&probing, &tunnels).await?;
+        let session = db::open(&reached).await?;
 
         return match &session.engine {
             db::Engine::Driver(driver) => driver.databases().await,
@@ -267,8 +376,6 @@ async fn databases(config: SessionConfig) -> Result<Vec<String>, String> {
         _ => return Ok(Vec::new()),
     };
 
-    let mut probing = config.clone();
-
     if probing.database.is_empty() {
         probing.database = match crate::backends::transport_of(&config.kind) {
             Transport::MySql => "information_schema".into(),
@@ -276,16 +383,15 @@ async fn databases(config: SessionConfig) -> Result<Vec<String>, String> {
         };
     }
 
-    probing.read_only = true;
-
-    let session = db::open(&probing).await?;
+    let (reached, _hop) = through(&probing, &tunnels).await?;
+    let session = db::open(&reached).await?;
     let result = db::query(&session, listing).await?;
 
-    return Ok(result
+    Ok(result
         .rows
         .into_iter()
         .filter_map(|row| row.into_iter().next().flatten())
-        .collect());
+        .collect())
 }
 
 async fn supabase_projects(token: &str) -> Result<Vec<String>, String> {
@@ -293,21 +399,15 @@ async fn supabase_projects(token: &str) -> Result<Vec<String>, String> {
         return Ok(Vec::new());
     }
 
-    let body: Json = reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get("https://api.supabase.com/v1/projects")
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|error| error.to_string())?
-        .json()
-        .await
         .map_err(|error| error.to_string())?;
 
-    if let Some(message) = body.get("message").and_then(Json::as_str) {
-        return Err(message.to_string());
-    }
-
-    return Ok(body
+    Ok(net::answer(response)
+        .await?
         .as_array()
         .map(|projects| {
             projects
@@ -316,7 +416,7 @@ async fn supabase_projects(token: &str) -> Result<Vec<String>, String> {
                 .map(|id| id.to_string())
                 .collect()
         })
-        .unwrap_or_default());
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -328,8 +428,9 @@ async fn connect(
 ) -> Result<SessionHandle, String> {
     let (reached, hop) = through(&config, &tunnels).await?;
     let session = db::open(&reached).await?;
+    let saving = config.clone();
 
-    vault::remember(&config)?;
+    off_thread(move || vault::remember(&saving)).await?;
 
     let handle = sessions.insert(session);
 
@@ -349,7 +450,7 @@ async fn connect(
         });
     }
 
-    return Ok(handle);
+    Ok(handle)
 }
 
 #[tauri::command]
@@ -367,7 +468,7 @@ async fn disconnect(
     sessions.remove(&id);
     tunnels.drop_for(&id);
 
-    return Ok(());
+    Ok(())
 }
 
 #[tauri::command]
@@ -395,7 +496,7 @@ async fn export_result(
 ) -> Result<u64, String> {
     let session = sessions.get(&id)?;
 
-    return export::export_result(&session, &result, &table, format, &path);
+    return export::export_result(&session, &result, &table, format, &path).await;
 }
 
 #[tauri::command]
@@ -455,7 +556,7 @@ async fn mqtt_clear(
         serde_json::json!({ "session": id, "topic": topic }),
     );
 
-    return Ok(());
+    Ok(())
 }
 
 #[tauri::command]
@@ -528,7 +629,7 @@ async fn s3_upload(
         serde_json::json!({ "session": id, "topic": bucket }),
     );
 
-    return Ok(());
+    Ok(())
 }
 
 #[tauri::command]
@@ -552,7 +653,7 @@ async fn s3_delete(
         serde_json::json!({ "session": id, "topic": bucket }),
     );
 
-    return Ok(());
+    Ok(())
 }
 
 #[tauri::command]
@@ -573,7 +674,7 @@ async fn mqtt_subscriptions(
 ) -> Result<Vec<crate::engines::mqtt::Subscription>, String> {
     let session = sessions.get(&id)?;
 
-    return Ok(session.mqtt()?.subscriptions());
+    Ok(session.mqtt()?.subscriptions())
 }
 
 #[tauri::command]
@@ -582,10 +683,12 @@ async fn explain_query(
     sql: String,
     analyze: bool,
     sessions: State<'_, Sessions>,
+    busy: State<'_, Busy>,
 ) -> Result<plan::Plan, String> {
     let session = sessions.get(&id)?;
 
-    return plan::explain(&session, &sql, analyze).await;
+    busy.watch(&id, plan::explain(&session, &sql, analyze))
+        .await
 }
 
 #[tauri::command]
@@ -616,12 +719,12 @@ async fn use_schema(id: String, name: String, sessions: State<'_, Sessions>) -> 
 }
 
 #[tauri::command]
-fn check_sql(
+async fn check_sql(
     sql: String,
     dialect: String,
-    reader: State<'_, highlight::Highlighter>,
-) -> Option<highlight::Fault> {
-    return reader.fault(&dialect, &sql);
+    app: AppHandle,
+) -> Result<Option<highlight::Fault>, String> {
+    off_thread(move || Ok(app.state::<Highlighter>().fault(&dialect, &sql))).await
 }
 
 #[tauri::command]
@@ -643,7 +746,7 @@ async fn end_transaction(
 }
 
 #[tauri::command]
-fn pending_edits(
+async fn pending_edits(
     id: String,
     table: String,
     edits: Vec<writing::Edit>,
@@ -651,7 +754,7 @@ fn pending_edits(
 ) -> Result<Vec<String>, String> {
     let session = sessions.get(&id)?;
 
-    return Ok(writing::edit_statements(&session, &table, &edits));
+    writing::edit_statements(&session, &table, &edits).await
 }
 
 #[tauri::command]
@@ -662,7 +765,7 @@ async fn set_read_only(id: String, on: bool, sessions: State<'_, Sessions>) -> R
 }
 
 #[tauri::command]
-fn built_query(
+async fn built_query(
     id: String,
     table: String,
     slice: slicing::Slice,
@@ -671,7 +774,7 @@ fn built_query(
 ) -> Result<String, String> {
     let session = sessions.get(&id)?;
 
-    return Ok(slicing::shaped_query(&session, &table, &slice, &shape));
+    return Ok(slicing::shaped_query(&session, &table, &slice, &shape).await);
 }
 
 #[tauri::command]
@@ -680,10 +783,12 @@ async fn table_rows(
     table: String,
     slice: slicing::Slice,
     sessions: State<'_, Sessions>,
+    busy: State<'_, Busy>,
 ) -> Result<QueryResult, String> {
     let session = sessions.get(&id)?;
 
-    return slicing::table_rows(&session, &table, &slice).await;
+    busy.watch(&id, slicing::table_rows(&session, &table, &slice))
+        .await
 }
 
 #[tauri::command]
@@ -691,10 +796,31 @@ async fn run_query(
     id: String,
     sql: String,
     sessions: State<'_, Sessions>,
+    busy: State<'_, Busy>,
 ) -> Result<QueryResult, String> {
     let session = sessions.get(&id)?;
 
-    return db::query(&session, &sql).await;
+    busy.watch(&id, db::query(&session, &sql)).await
+}
+
+#[tauri::command]
+async fn cancel_query(
+    session_id: String,
+    sessions: State<'_, Sessions>,
+    busy: State<'_, Busy>,
+) -> Result<bool, String> {
+    if !busy.running(&session_id) {
+        return Ok(false);
+    }
+
+    let session = sessions.get(&session_id)?;
+
+    // a server-side cancel lets the statement fail with the server's own words
+    if session.cancel().await.is_ok() {
+        return Ok(true);
+    }
+
+    Ok(busy.stop(&session_id))
 }
 
 #[tauri::command]
@@ -717,8 +843,8 @@ async fn schema(id: String, sessions: State<'_, Sessions>) -> Result<Vec<TableSc
 }
 
 #[tauri::command]
-fn highlight_sql(sql: String, dialect: String, highlighter: State<'_, Highlighter>) -> Vec<Token> {
-    return highlighter.tokens(&dialect, &sql);
+async fn highlight_sql(sql: String, dialect: String, app: AppHandle) -> Result<Vec<Token>, String> {
+    off_thread(move || Ok(app.state::<Highlighter>().tokens(&dialect, &sql))).await
 }
 
 #[tauri::command]
@@ -735,7 +861,7 @@ async fn lsp_start(
 async fn lsp_stop(dialect: String, servers: State<'_, Servers>) -> Result<(), String> {
     servers.stop(&dialect).await;
 
-    return Ok(());
+    Ok(())
 }
 
 #[tauri::command]
@@ -756,14 +882,31 @@ async fn lsp_complete(
     return servers.complete(&dialect, line, character).await;
 }
 
+const DOCUMENT_EXTENSION: &str = "gpqlerd";
+
+fn document(path: &str) -> Result<&std::path::Path, String> {
+    let path = std::path::Path::new(path);
+    let ours = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(DOCUMENT_EXTENSION));
+
+    if !ours {
+        return Err(format!(
+            "only .{DOCUMENT_EXTENSION} documents can be opened or saved here"
+        ));
+    }
+
+    Ok(path)
+}
+
 #[tauri::command]
 fn read_document(path: String) -> Result<String, String> {
-    return std::fs::read_to_string(&path).map_err(|e| e.to_string());
+    std::fs::read_to_string(document(&path)?).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn write_document(path: String, text: String) -> Result<(), String> {
-    return std::fs::write(&path, text).map_err(|e| e.to_string());
+    std::fs::write(document(&path)?, text).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -792,46 +935,75 @@ fn set_acrylic(window: tauri::Window, on: bool, dark: bool) -> Result<(), String
 
     window.set_theme(Some(theme)).map_err(|e| e.to_string())?;
 
-    return window.set_effects(effects).map_err(|e| e.to_string());
+    window.set_effects(effects).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn look_on_this_machine() -> Vec<u16> {
-    return discovery::local_postgres_ports();
+async fn look_on_this_machine() -> Vec<u16> {
+    discovery::local_postgres_ports().await
 }
 
-fn probe_credentials() -> Vec<(String, String)> {
-    let mut candidates: Vec<(String, String)> = vault::list()
+fn keyring() -> discovery::Keyring {
+    let saved = vault::list()
+        .unwrap_or_default()
         .into_iter()
-        .filter(|login| !login.user.is_empty())
-        .map(|login| (login.user, login.password))
+        .filter(|login| !login.tunnel.wanted() && !login.user.is_empty())
+        .filter_map(|login| {
+            let (host, port) = if login.endpoint.is_empty() {
+                let port = if login.port.is_empty() {
+                    backends::find(&login.kind)?.port
+                } else {
+                    login.port.as_str()
+                };
+
+                (login.host.clone(), port.parse().ok()?)
+            } else {
+                address_of(&login.endpoint)?
+            };
+
+            Some(discovery::Saved {
+                host,
+                port,
+                key: discovery::Key {
+                    user: login.user,
+                    password: login.password,
+                    tls: login.tls,
+                },
+            })
+        })
         .collect();
 
-    candidates.extend(
-        vault::credentials()
-            .into_iter()
-            .map(|preset| (preset.user, preset.password)),
-    );
-    candidates.dedup();
+    let presets = vault::credentials()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|preset| discovery::Key {
+            user: preset.user,
+            password: preset.password,
+            tls: String::new(),
+        })
+        .collect();
 
-    return candidates;
+    discovery::Keyring { saved, presets }
 }
 
 #[tauri::command]
 async fn scan_local() -> Vec<Discovery> {
-    return discovery::scan(&probe_credentials()).await;
+    let keys = off_thread(|| Ok(keyring())).await.unwrap_or_default();
+
+    discovery::scan(&keys).await
 }
 
 #[tauri::command]
-async fn scan_tailnet() -> Vec<Discovery> {
-    let candidates = probe_credentials();
-    let mut found = Vec::new();
+async fn scan_tailnet() -> Result<Vec<Discovery>, String> {
+    let hosts: Vec<String> = tailnet::peers()
+        .await?
+        .into_iter()
+        .filter(|peer| peer.online)
+        .map(|peer| peer.host)
+        .collect();
+    let keys = off_thread(|| Ok(keyring())).await?;
 
-    for peer in tailnet::peers().into_iter().filter(|peer| peer.online) {
-        found.extend(discovery::scan_host(&peer.host, &[5432, 5433], &candidates).await);
-    }
-
-    return found;
+    Ok(discovery::scan_hosts(&hosts, &[5432, 5433], &keys).await)
 }
 
 #[derive(serde::Serialize)]
@@ -842,116 +1014,229 @@ struct SharedErd {
     open: bool,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ErdRoom {
+    id: String,
+    name: String,
+    open: bool,
+    created_at: Json,
+}
+
+impl ErdRoom {
+    fn read(room: &Json) -> Option<Self> {
+        let open = room.get("open").unwrap_or(&Json::Null);
+
+        Some(ErdRoom {
+            id: room.get("id")?.as_str()?.to_string(),
+            name: room
+                .get("name")
+                .and_then(Json::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            open: open
+                .as_bool()
+                .or_else(|| open.as_i64().map(|flag| flag != 0))
+                .unwrap_or(false),
+            created_at: room.get("createdAt").cloned().unwrap_or(Json::Null),
+        })
+    }
+}
+
+async fn signed_in() -> Result<String, String> {
+    off_thread(|| Ok(vault::account_token()))
+        .await?
+        .ok_or_else(|| "sign in first".to_string())
+}
+
+fn erd_endpoint(site: &str) -> String {
+    format!("{}/api/erd", site.trim_end_matches('/'))
+}
+
+async fn sent(request: reqwest::RequestBuilder) -> Result<Json, String> {
+    let response = request.send().await.map_err(|error| error.to_string())?;
+
+    net::answer(response).await
+}
+
 #[tauri::command]
 async fn publish_schema(
     site: String,
     name: String,
     sessions: State<'_, Sessions>,
     session_id: String,
+    id: Option<String>,
 ) -> Result<SharedErd, String> {
-    let token = vault::account_token().ok_or_else(|| "sign in first".to_string())?;
+    let token = signed_in().await?;
     let session = sessions.get(&session_id)?;
     let tables = introspect::schema(&session).await?;
+    let client = reqwest::Client::new();
+    let endpoint = erd_endpoint(&site);
+    let wanted = id.filter(|id| !id.trim().is_empty());
 
-    let answer: serde_json::Value = reqwest::Client::new()
-        .post(format!("{}/api/erd", site.trim_end_matches('/')))
-        .bearer_auth(token)
-        .json(&serde_json::json!({ "name": name, "tables": tables }))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .json()
-        .await
-        .map_err(|error| error.to_string())?;
+    let mut updated = None;
+
+    if let Some(id) = &wanted {
+        let response = client
+            .put(&endpoint)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "id": id, "name": name, "tables": tables }))
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+
+        // a room deleted on the web answers 404 and a site without PUT answers 405; both start afresh
+        let gone = matches!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED
+        );
+
+        if !gone {
+            updated = Some(net::answer(response).await?);
+        }
+    }
+
+    let (answer, requested) = match updated {
+        Some(answer) => (answer, wanted),
+        None => {
+            let created = sent(
+                client
+                    .post(&endpoint)
+                    .bearer_auth(&token)
+                    .json(&serde_json::json!({ "name": name, "tables": tables })),
+            )
+            .await?;
+
+            (created, None)
+        }
+    };
 
     let id = answer
         .get("id")
-        .and_then(|value| value.as_str())
+        .and_then(Json::as_str)
+        .map(str::to_string)
+        .or(requested)
         .ok_or_else(|| "the site did not hand back a room".to_string())?;
 
-    return Ok(SharedErd {
-        id: id.to_string(),
+    Ok(SharedErd {
         link: format!("{}/erd/{id}", site.trim_end_matches('/')),
-        open: false,
-    });
+        open: answer.get("open").and_then(Json::as_bool).unwrap_or(false),
+        id,
+    })
 }
 
 #[tauri::command]
 async fn share_erd(site: String, id: String, open: bool) -> Result<bool, String> {
-    let token = vault::account_token().ok_or_else(|| "sign in first".to_string())?;
+    let token = signed_in().await?;
+    let answer = sent(
+        reqwest::Client::new()
+            .patch(erd_endpoint(&site))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "id": id, "open": open })),
+    )
+    .await?;
 
-    let answer: serde_json::Value = reqwest::Client::new()
-        .patch(format!("{}/api/erd", site.trim_end_matches('/')))
-        .bearer_auth(token)
-        .json(&serde_json::json!({ "id": id, "open": open }))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .json()
-        .await
-        .map_err(|error| error.to_string())?;
-
-    return Ok(answer
+    answer
         .get("open")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(open));
+        .and_then(Json::as_bool)
+        .ok_or_else(|| "the site did not say whether the room is open".to_string())
+}
+
+#[tauri::command]
+async fn close_erd(site: String, id: String) -> Result<(), String> {
+    let token = signed_in().await?;
+
+    sent(
+        reqwest::Client::new()
+            .delete(erd_endpoint(&site))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "id": id })),
+    )
+    .await
+    .map(|_| ())
+}
+
+#[tauri::command]
+async fn list_erd(site: String) -> Result<Vec<ErdRoom>, String> {
+    let token = signed_in().await?;
+    let answer = sent(
+        reqwest::Client::new()
+            .get(erd_endpoint(&site))
+            .bearer_auth(token),
+    )
+    .await?;
+
+    Ok(answer
+        .get("rooms")
+        .and_then(Json::as_array)
+        .map(|rooms| rooms.iter().filter_map(ErdRoom::read).collect())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
 fn open_link(url: String) -> Result<(), String> {
-    return tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|error| error.to_string());
+    let link = url::Url::parse(url.trim())
+        .map_err(|error| format!("that link cannot be read: {error}"))?;
+
+    if !matches!(link.scheme(), "http" | "https" | "mailto") {
+        return Err(format!("{} links are not opened from GPQL", link.scheme()));
+    }
+
+    tauri_plugin_opener::open_url(link.as_str(), None::<&str>).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn port_free(port: u16) -> bool {
-    return tunnel::free(port);
+    tunnel::free(port)
 }
 
 #[tauri::command]
-fn tailnet_peers() -> Vec<tailnet::Peer> {
-    return tailnet::peers();
+async fn tailnet_peers() -> Result<Vec<tailnet::Peer>, String> {
+    tailnet::peers().await
 }
 
 #[tauri::command]
 fn backends() -> &'static [backends::Backend] {
-    return backends::CATALOG;
+    backends::CATALOG
 }
 
 #[tauri::command]
-fn credentials() -> Vec<Credential> {
-    return vault::credentials();
+fn credentials() -> Result<Vec<Credential>, String> {
+    vault::credentials()
 }
 
 #[tauri::command]
 fn save_credential(credential: Credential) -> Result<(), String> {
-    return vault::save_credential(credential);
+    vault::save_credential(credential)
 }
 
 #[tauri::command]
 fn forget_credential(name: String) -> Result<(), String> {
-    return vault::forget_credential(&name);
+    vault::forget_credential(&name)
 }
 
 #[tauri::command]
-fn providers() -> Vec<Provider> {
-    return vault::providers();
+fn providers() -> Result<Vec<Provider>, String> {
+    vault::providers()
 }
 
 #[tauri::command]
 fn save_provider(provider: Provider) -> Result<(), String> {
-    return vault::save_provider(provider);
+    vault::save_provider(provider)
 }
 
 #[tauri::command]
 fn forget_provider(id: String) -> Result<(), String> {
-    return vault::forget_provider(&id);
+    vault::forget_provider(&id)
 }
 
 #[tauri::command]
 async fn save_connection(config: SessionConfig) -> Result<String, String> {
-    vault::remember(&config)?;
+    let described = vault::describe(&config);
 
-    return Ok(vault::describe(&config));
+    off_thread(move || vault::remember(&config)).await?;
+
+    Ok(described)
 }
 
 #[derive(serde::Serialize)]
@@ -964,20 +1249,23 @@ struct Release {
 
 #[tauri::command]
 async fn latest_release() -> Result<Release, String> {
-    let answer: serde_json::Value = reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get("https://api.github.com/repos/pleahmacaka/gpql/releases/latest")
         .header("user-agent", "gpql")
         .send()
         .await
-        .map_err(|error| error.to_string())?
-        .json()
-        .await
         .map_err(|error| error.to_string())?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("no release published yet".into());
+    }
+
+    let answer = net::answer(response).await?;
 
     let latest = answer
         .get("tag_name")
         .and_then(|tag| tag.as_str())
-        .ok_or("no release published yet")?
+        .ok_or("GitHub answered without a release tag")?
         .trim_start_matches('v')
         .to_string();
 
@@ -990,12 +1278,12 @@ async fn latest_release() -> Result<Release, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let fresh = older(&current, &latest);
 
-    return Ok(Release {
+    Ok(Release {
         current,
         latest,
         link,
         fresh,
-    });
+    })
 }
 
 fn older(current: &str, latest: &str) -> bool {
@@ -1016,19 +1304,12 @@ fn older(current: &str, latest: &str) -> bool {
         }
     }
 
-    return false;
+    false
 }
 
 #[tauri::command]
 async fn openrouter_models() -> Result<Vec<String>, String> {
-    let answer: serde_json::Value = reqwest::Client::new()
-        .get("https://openrouter.ai/api/v1/models")
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .json()
-        .await
-        .map_err(|error| error.to_string())?;
+    let answer = sent(reqwest::Client::new().get("https://openrouter.ai/api/v1/models")).await?;
 
     let mut names: Vec<String> = answer
         .get("data")
@@ -1044,7 +1325,7 @@ async fn openrouter_models() -> Result<Vec<String>, String> {
 
     names.sort();
 
-    return Ok(names);
+    Ok(names)
 }
 
 #[tauri::command]
@@ -1062,38 +1343,50 @@ async fn connect_openrouter(model: String) -> Result<Provider, String> {
         key,
     };
 
-    vault::save_provider(provider.clone())?;
+    let saving = provider.clone();
 
-    return Ok(provider);
+    off_thread(move || vault::save_provider(saving)).await?;
+
+    Ok(provider)
 }
 
 #[tauri::command]
 async fn sign_in(site: String) -> Result<(), String> {
     let token = login::sign_in(&site).await?;
 
-    return vault::set_account_token(&token);
+    off_thread(move || vault::set_account_token(&token)).await
 }
 
 #[tauri::command]
-fn saved_logins() -> Vec<SavedLogin> {
-    return vault::list();
+fn saved_logins() -> Result<Vec<vault::ListedLogin>, String> {
+    vault::listed()
+}
+
+#[tauri::command]
+fn saved_login(url: String) -> Result<Option<SavedLogin>, String> {
+    vault::find(&url)
+}
+
+#[tauri::command]
+fn saved_logins_moved() -> Option<String> {
+    vault::set_aside_notice()
 }
 
 #[tauri::command]
 fn forget_login(url: String) -> Result<(), String> {
-    return vault::forget(&url);
+    vault::forget(&url)
 }
 
 #[tauri::command]
 fn forget_all_logins() -> Result<(), String> {
-    return vault::forget_all();
+    vault::forget_all()
 }
 
 #[tauri::command]
 fn logins_location() -> String {
-    return vault::logins_path()
+    vault::logins_path()
         .map(|path| path.display().to_string())
-        .unwrap_or_default();
+        .unwrap_or_default()
 }
 
 // openssh writes the public half beside the private one and keeps its own
@@ -1123,7 +1416,7 @@ fn keys_in(folder: &std::path::Path) -> Vec<String> {
 
     found.sort();
 
-    return found;
+    found
 }
 
 #[tauri::command]
@@ -1132,7 +1425,7 @@ fn ssh_keys() -> Vec<String> {
         return Vec::new();
     };
 
-    return keys_in(&folder);
+    keys_in(&folder)
 }
 
 #[cfg(test)]
@@ -1181,17 +1474,17 @@ mod ssh_folder {
 
 #[tauri::command]
 fn account_token() -> Option<String> {
-    return vault::account_token();
+    vault::account_token()
 }
 
 #[tauri::command]
 fn set_account_token(token: String) -> Result<(), String> {
-    return vault::set_account_token(&token);
+    vault::set_account_token(&token)
 }
 
 #[tauri::command]
 fn forget_account() -> Result<(), String> {
-    return vault::clear_account();
+    vault::clear_account()
 }
 
 #[tauri::command]
@@ -1200,12 +1493,12 @@ fn local_query(
     params: Vec<Json>,
     store: State<'_, Local>,
 ) -> Result<Vec<Vec<Json>>, String> {
-    return local::run(&store, &sql, &params);
+    local::run(&store, &sql, &params)
 }
 
 #[tauri::command]
 fn local_batch(sql: String, store: State<'_, Local>) -> Result<(), String> {
-    return local::batch(&store, &sql);
+    local::batch(&store, &sql)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1220,6 +1513,7 @@ pub fn run() {
         .manage(Local::open().expect("gpql could not open its local database"))
         .manage(Highlighter::new().expect("gpql could not load its SQL grammar"))
         .manage(Servers::default())
+        .manage(Busy::default())
         .invoke_handler(tauri::generate_handler![
             check,
             probe_recents,
@@ -1253,6 +1547,7 @@ pub fn run() {
             end_transaction,
             pending_edits,
             run_query,
+            cancel_query,
             schema,
             apply_edits,
             highlight_sql,
@@ -1271,6 +1566,8 @@ pub fn run() {
             port_free,
             publish_schema,
             share_erd,
+            close_erd,
+            list_erd,
             open_link,
             backends,
             credentials,
@@ -1284,6 +1581,8 @@ pub fn run() {
             openrouter_models,
             latest_release,
             saved_logins,
+            saved_login,
+            saved_logins_moved,
             forget_login,
             forget_all_logins,
             logins_location,
@@ -1330,10 +1629,21 @@ pub fn run() {
         });
 
     #[cfg(debug_assertions)]
-    let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .bind_address("127.0.0.1")
+            .build(),
+    );
+
+    let mut context = tauri::generate_context!();
+
+    // the debug-only mcp bridge injects inline scripts, which the shipped csp refuses
+    if cfg!(debug_assertions) {
+        context.config_mut().app.security.csp = None;
+    }
 
     builder
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 

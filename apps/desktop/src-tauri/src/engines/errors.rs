@@ -3,15 +3,24 @@ use tokio_postgres::Error as PgError;
 pub fn friendly(error: impl std::fmt::Display) -> String {
     let text = error.to_string();
 
-    return text
-        .strip_prefix("error connecting to server: ")
+    text.strip_prefix("error connecting to server: ")
         .unwrap_or(&text)
-        .to_string();
+        .to_string()
 }
 
 pub fn friendly_pg(error: PgError) -> String {
     if let Some(reported) = error.as_db_error() {
-        return reported.message().to_string();
+        let mut text = reported.message().to_string();
+
+        if let Some(detail) = reported.detail() {
+            text.push_str(&format!("\nDETAIL: {detail}"));
+        }
+
+        if let Some(hint) = reported.hint() {
+            text.push_str(&format!("\nHINT: {hint}"));
+        }
+
+        return text;
     }
 
     let mut text = error.to_string();
@@ -22,28 +31,5 @@ pub fn friendly_pg(error: PgError) -> String {
         cause = inner.source();
     }
 
-    return plain_message(&text);
-}
-
-fn plain_message(text: &str) -> String {
-    let known = [
-        ("password missing", "gpql.needs_password"),
-        ("os error 10061", "gpql.no_listener"),
-        ("Connection refused", "gpql.no_listener"),
-        ("os error 10060", "gpql.no_answer"),
-        ("os error 11004", "gpql.ipv6_only"),
-        ("ENOIDENTIFIER", "gpql.needs_tenant"),
-        ("failed to lookup address", "gpql.bad_host"),
-    ];
-
-    for (needle, friendly) in known {
-        if text.contains(needle) {
-            return friendly.to_string();
-        }
-    }
-
-    return text
-        .strip_prefix("error connecting to server: ")
-        .unwrap_or(text)
-        .to_string();
+    friendly(text)
 }

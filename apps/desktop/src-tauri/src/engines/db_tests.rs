@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::engines::slicing::{
-    like_pattern, predicate, table_rows, Filter, Op, Slice, Sort,
+    cypher_rows, like_pattern, predicate, table_rows, Filter, Op, Slice, Sort,
 };
 use crate::engines::writing::{apply, edit_statements, finish, set_manual, Edit};
 
@@ -10,11 +10,23 @@ mod tests {
     use super::*;
 
     fn filter(op: Op, value: &str) -> Filter {
-        return Filter {
+        Filter {
             column: "name".into(),
             op,
             value: value.into(),
-        };
+        }
+    }
+
+    #[test]
+    fn erd_annotations_name_their_references() {
+        use crate::engines::introspect::annotation;
+
+        let (text, hints) = annotation(
+            r#"@gpql:comment "who placed it @ref users.id, billed @ref:billing.accounts.id. @ref nothing""#,
+        );
+
+        assert_eq!(text.as_deref(), Some("who placed it billed"));
+        assert_eq!(hints, ["users.id", "billing.accounts.id"]);
     }
 
     #[test]
@@ -22,9 +34,78 @@ mod tests {
         let sneaky = filter(Op::Eq, "x' or '1'='1");
 
         assert_eq!(
-            predicate("\"name\"", &sneaky),
+            predicate("postgres", "\"name\"", &sneaky),
             "\"name\" = 'x'' or ''1''=''1'"
         );
+    }
+
+    #[test]
+    fn a_backslash_cannot_escape_the_closing_quote() {
+        let sneaky = filter(Op::Eq, "\\'-- x");
+
+        assert_eq!(predicate("mysql", "c", &sneaky), "c = '\\\\''-- x'");
+        assert_eq!(predicate("clickhouse", "c", &sneaky), "c = '\\\\''-- x'");
+        assert_eq!(predicate("postgres", "c", &sneaky), "c = E'\\\\''-- x'");
+        assert_eq!(predicate("sqlite", "c", &sneaky), "c = '\\''-- x'");
+    }
+
+    const OPS: [Op; 11] = [
+        Op::Contains,
+        Op::Eq,
+        Op::Ne,
+        Op::Gt,
+        Op::Gte,
+        Op::Lt,
+        Op::Lte,
+        Op::Starts,
+        Op::Ends,
+        Op::IsNull,
+        Op::NotNull,
+    ];
+
+    // these engines run only what the classifier calls a read while read only,
+    // so every filter the grid writes has to parse as one
+    #[test]
+    fn every_generated_filter_is_a_read_where_the_classifier_decides() {
+        use crate::engines::access::{access, Access};
+
+        let awkward = "it's \\ 50% _x! 12";
+        let engines = [
+            ("turso", "\"c\"", "\"t\""),
+            ("d1", "`c`", "`t`"),
+            ("snowflake", "\"c\"", "\"t\""),
+            ("supabase_api", "\"c\"", "\"public\".\"t\""),
+        ];
+
+        for (flavour, column, table) in engines {
+            for op in OPS {
+                let clause = predicate(flavour, column, &filter(op, awkward));
+                let sql = format!(
+                    "select * from {table} where {clause} order by {column} asc limit 10 offset 0"
+                );
+
+                assert_eq!(access(flavour, &sql), Access::Read, "{sql}");
+            }
+        }
+
+        for op in OPS {
+            let slice = Slice {
+                limit: 10,
+                sort: Some(Sort {
+                    column: "na`me".into(),
+                    descending: true,
+                }),
+                filters: vec![Filter {
+                    column: "na`me".into(),
+                    op,
+                    value: awkward.into(),
+                }],
+                ..Default::default()
+            };
+            let script = cypher_rows("Pe`rson", &slice);
+
+            assert_eq!(access("neo4j", &script), Access::Read, "{script}");
+        }
     }
 
     #[test]
@@ -36,16 +117,23 @@ mod tests {
 
     #[test]
     fn a_like_filter_declares_its_escape_character() {
-        let clause = predicate("c", &filter(Op::Contains, "x"));
+        let clause = predicate("postgres", "c", &filter(Op::Contains, "x"));
 
         assert!(clause.ends_with("escape '!'"), "{clause}");
+        assert_eq!(
+            predicate("clickhouse", "c", &filter(Op::Contains, "5%")),
+            "c like '%5\\\\%%'"
+        );
     }
 
     #[test]
     fn value_less_operators_ignore_the_value() {
-        assert_eq!(predicate("c", &filter(Op::IsNull, "junk")), "c is null");
         assert_eq!(
-            predicate("c", &filter(Op::NotNull, "junk")),
+            predicate("postgres", "c", &filter(Op::IsNull, "junk")),
+            "c is null"
+        );
+        assert_eq!(
+            predicate("postgres", "c", &filter(Op::NotNull, "junk")),
             "c is not null"
         );
     }
@@ -77,7 +165,7 @@ mod live_support {
             ..Default::default()
         };
 
-        return Some(open(&config).await.expect("could not open the test server"));
+        Some(open(&config).await.expect("could not open the test server"))
     }
 }
 
@@ -86,15 +174,15 @@ mod live {
     use live_support::*;
 
     fn slice(limit: u32, offset: u32) -> Slice {
-        return Slice {
+        Slice {
             limit,
             offset,
             ..Default::default()
-        };
+        }
     }
 
     fn column(result: &QueryResult, name: &str) -> usize {
-        return result.columns.iter().position(|c| c == name).unwrap();
+        result.columns.iter().position(|c| c == name).unwrap()
     }
 
     #[tokio::test]
@@ -222,14 +310,14 @@ mod live {
 
 mod exporting {
     use super::*;
-    use live_support::*;
     use crate::engines::export::{export_table, Format};
+    use live_support::*;
 
     fn temp(name: &str) -> String {
-        return std::env::temp_dir()
+        std::env::temp_dir()
             .join(name)
             .to_string_lossy()
-            .to_string();
+            .to_string()
     }
 
     #[tokio::test]
@@ -239,12 +327,13 @@ mod exporting {
         };
 
         let path = temp("gpql-big.csv");
-        let mut want = Slice::default();
-
-        want.sort = Some(Sort {
-            column: "id".into(),
-            descending: false,
-        });
+        let want = Slice {
+            sort: Some(Sort {
+                column: "id".into(),
+                descending: false,
+            }),
+            ..Default::default()
+        };
 
         let written = export_table(&session, "big", &want, Format::Csv, &path)
             .await
@@ -269,13 +358,14 @@ mod exporting {
         };
 
         let path = temp("gpql-filtered.csv");
-        let mut want = Slice::default();
-
-        want.filters = vec![Filter {
-            column: "note".into(),
-            op: Op::IsNull,
-            value: String::new(),
-        }];
+        let want = Slice {
+            filters: vec![Filter {
+                column: "note".into(),
+                op: Op::IsNull,
+                value: String::new(),
+            }],
+            ..Default::default()
+        };
 
         let written = export_table(&session, "big", &want, Format::Csv, &path)
             .await
@@ -312,13 +402,14 @@ mod exporting {
         };
 
         let path = temp("gpql-small.json");
-        let mut want = Slice::default();
-
-        want.limit = 8;
-        want.sort = Some(Sort {
-            column: "id".into(),
-            descending: false,
-        });
+        let want = Slice {
+            limit: 8,
+            sort: Some(Sort {
+                column: "id".into(),
+                descending: false,
+            }),
+            ..Default::default()
+        };
 
         export_table(&session, "big", &want, Format::Json, &path)
             .await
@@ -349,7 +440,10 @@ mod exporting {
 
         let text = std::fs::read_to_string(&path).unwrap();
 
-        assert!(text.contains("insert into \"awkward\" (\"v\") values"), "{text}");
+        assert!(
+            text.contains("insert into \"awkward\" (\"v\") values"),
+            "{text}"
+        );
         assert!(text.contains("'say \"hi\"'"), "{text}");
         assert!(text.contains("'it''s'"), "{text}");
 
@@ -369,7 +463,7 @@ mod transacting {
     const PREVIEWED: &str = "5";
 
     fn seeded(id: &str) -> String {
-        return (id.parse::<i32>().unwrap() * 100).to_string();
+        (id.parse::<i32>().unwrap() * 100).to_string()
     }
 
     fn edit(id: &str, amount: &str) -> Edit {
@@ -379,7 +473,7 @@ mod transacting {
         keys.insert("id".to_string(), Some(id.to_string()));
         set.insert("amount".to_string(), Some(amount.to_string()));
 
-        return Edit { keys, set };
+        Edit { keys, set }
     }
 
     // repeated runs must start from the same place, so each test seeds its row
@@ -393,11 +487,14 @@ mod transacting {
     }
 
     async fn amount(session: &Session, id: &str) -> String {
-        let page = query(session, &format!("select amount from money_ where id = {id}"))
-            .await
-            .unwrap();
+        let page = query(
+            session,
+            &format!("select amount from money_ where id = {id}"),
+        )
+        .await
+        .unwrap();
 
-        return page.rows[0][0].clone().unwrap();
+        page.rows[0][0].clone().unwrap()
     }
 
     #[tokio::test]
@@ -423,7 +520,9 @@ mod transacting {
 
         restore(&writer, HIDDEN).await;
         set_manual(&writer, true).await.unwrap();
-        apply(&writer, "money_", &[edit(HIDDEN, "999")]).await.unwrap();
+        apply(&writer, "money_", &[edit(HIDDEN, "999")])
+            .await
+            .unwrap();
 
         assert_eq!(amount(&writer, HIDDEN).await, "999", "its own view moves");
         assert_eq!(
@@ -484,23 +583,23 @@ mod transacting {
             return;
         };
 
-        let statements = edit_statements(&session, "money_", &[edit(PREVIEWED, "42")]);
+        let statements = edit_statements(&session, "money_", &[edit(PREVIEWED, "42")])
+            .await
+            .unwrap();
 
         assert_eq!(statements.len(), 1);
         assert_eq!(
             statements[0],
-            format!(
-                "update \"money_\" set \"amount\" = '42' where \"id\" = '{PREVIEWED}'"
-            )
+            format!("update \"money_\" set \"amount\" = '42' where \"id\" = '{PREVIEWED}'")
         );
     }
 }
 
 mod defining {
     use super::*;
-    use live_support::*;
     use crate::engines::ddl::object_ddl;
     use crate::engines::plan::explain;
+    use live_support::*;
 
     #[tokio::test]
     async fn a_table_definition_round_trips_through_the_server() {
@@ -516,17 +615,27 @@ mod defining {
         // constraint text comes back verbatim from the server
         let head = text.split_inclusive(");").next().unwrap().to_string();
 
-        query(&session, "drop schema if exists scratch cascade").await.unwrap();
+        query(&session, "drop schema if exists scratch cascade")
+            .await
+            .unwrap();
         query(&session, "create schema scratch").await.unwrap();
-        query(&session, "set search_path to scratch, public").await.unwrap();
+        query(&session, "set search_path to scratch, public")
+            .await
+            .unwrap();
 
         let replayed = query(&session, &head).await;
 
         query(&session, "set search_path to public").await.unwrap();
-        query(&session, "drop schema scratch cascade").await.unwrap();
+        query(&session, "drop schema scratch cascade")
+            .await
+            .unwrap();
 
-        replayed.unwrap_or_else(|failure| panic!("{failure}
-{text}"));
+        replayed.unwrap_or_else(|failure| {
+            panic!(
+                "{failure}
+{text}"
+            )
+        });
     }
 
     #[tokio::test]
@@ -553,7 +662,9 @@ mod defining {
             return;
         };
 
-        let text = object_ddl(&session, "cheap_books", None, None).await.unwrap();
+        let text = object_ddl(&session, "cheap_books", None, None)
+            .await
+            .unwrap();
 
         assert!(text.starts_with("create view \"cheap_books\" as"), "{text}");
         assert!(text.contains("price"), "{text}");
@@ -599,7 +710,9 @@ mod defining {
 
         assert!(failure.is_err(), "analyze would have deleted the rows");
 
-        let left = query(&session, "select count(*) from money_").await.unwrap();
+        let left = query(&session, "select count(*) from money_")
+            .await
+            .unwrap();
 
         assert_eq!(left.rows[0][0].as_deref(), Some("20"));
     }
@@ -624,15 +737,15 @@ mod defining {
 
 mod browsing {
     use super::*;
-    use live_support::*;
     use crate::engines::objects::objects;
+    use live_support::*;
 
     fn named<'a>(found: &'a [crate::engines::objects::DbObject], kind: &str) -> Vec<&'a str> {
-        return found
+        found
             .iter()
             .filter(|entry| entry.kind == kind)
             .map(|entry| entry.name.as_str())
-            .collect();
+            .collect()
     }
 
     #[tokio::test]
@@ -644,9 +757,14 @@ mod browsing {
         let found = objects(&session).await.unwrap();
 
         assert!(named(&found, "view").contains(&"cheap_books"), "views");
-        assert!(named(&found, "index").contains(&"book_title_idx"), "indexes");
         assert!(
-            named(&found, "sequence").iter().any(|n| n.contains("author")),
+            named(&found, "index").contains(&"book_title_idx"),
+            "indexes"
+        );
+        assert!(
+            named(&found, "sequence")
+                .iter()
+                .any(|n| n.contains("author")),
             "sequences: {:?}",
             named(&found, "sequence")
         );

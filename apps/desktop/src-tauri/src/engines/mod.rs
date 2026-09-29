@@ -1,3 +1,4 @@
+pub mod access;
 pub mod backends;
 pub mod db;
 pub mod ddl;

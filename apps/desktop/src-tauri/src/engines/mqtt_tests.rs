@@ -4,7 +4,7 @@ use crate::engines::db::{open, Session};
 use crate::engines::objects::objects;
 use crate::engines::slicing::table_rows;
 
-// end to end against a real broker; needs nanomq on PATH, so a machine
+// end to end against a real broker; needs mosquitto on PATH, so a machine
 // without one is not failed
 static BROKER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -12,12 +12,12 @@ struct Broker(std::process::Child);
 
 impl Broker {
     async fn start() -> Option<(Broker, u16)> {
-        if std::process::Command::new("nanomq")
-            .arg("--help")
+        if std::process::Command::new("mosquitto")
+            .arg("-h")
             .output()
             .is_err()
         {
-            eprintln!("nanomq is not installed; skipping the live mqtt test");
+            eprintln!("mosquitto is not installed; skipping the live mqtt test");
             return None;
         }
 
@@ -27,8 +27,9 @@ impl Broker {
             .unwrap()
             .port();
 
-        let child = std::process::Command::new("nanomq")
-            .args(["start", "--url", &format!("nmq-tcp://127.0.0.1:{port}")])
+        // with no config file mosquitto 2 lets anonymous clients in, on loopback only
+        let child = std::process::Command::new("mosquitto")
+            .args(["-p", &port.to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -48,7 +49,7 @@ impl Broker {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        panic!("nanomq did not open its port");
+        panic!("mosquitto did not open its port");
     }
 }
 
@@ -85,7 +86,7 @@ async fn seed(port: u16) {
 
     let (client, mut eventloop) = AsyncClient::new(options, 10);
 
-    tokio::spawn(async move { while let Ok(_) = eventloop.poll().await {} });
+    tokio::spawn(async move { while eventloop.poll().await.is_ok() {} });
 
     for index in 1..=3 {
         client

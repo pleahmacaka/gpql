@@ -11,7 +11,7 @@ pub struct DbObject {
 }
 
 fn collect(result: QueryResult, kind: &str) -> Vec<DbObject> {
-    return result
+    result
         .rows
         .into_iter()
         .map(|row| DbObject {
@@ -19,7 +19,7 @@ fn collect(result: QueryResult, kind: &str) -> Vec<DbObject> {
             kind: kind.to_string(),
             detail: row.get(1).cloned().flatten().unwrap_or_default(),
         })
-        .collect();
+        .collect()
 }
 
 async fn postgres_objects(session: &Session) -> Result<Vec<DbObject>, String> {
@@ -106,7 +106,7 @@ async fn postgres_objects(session: &Session) -> Result<Vec<DbObject>, String> {
 
     out.extend(collect(types, "type"));
 
-    return Ok(out);
+    Ok(out)
 }
 
 async fn sqlite_objects(session: &Session) -> Result<Vec<DbObject>, String> {
@@ -119,7 +119,7 @@ async fn sqlite_objects(session: &Session) -> Result<Vec<DbObject>, String> {
                 "select name, coalesce(tbl_name, '') from sqlite_master
                  where type = {} and name not like 'sqlite_%'
                  order by name",
-                literal(&Some(type_name.to_string()))
+                literal("sqlite", &Some(type_name.to_string()))
             ),
         )
         .await?;
@@ -127,7 +127,7 @@ async fn sqlite_objects(session: &Session) -> Result<Vec<DbObject>, String> {
         out.extend(collect(listed, kind));
     }
 
-    return Ok(out);
+    Ok(out)
 }
 
 async fn mysql_objects(session: &Session) -> Result<Vec<DbObject>, String> {
@@ -172,15 +172,15 @@ async fn mysql_objects(session: &Session) -> Result<Vec<DbObject>, String> {
 
     out.extend(collect(indexes, "index"));
 
-    return Ok(out);
+    Ok(out)
 }
 
 pub async fn objects(session: &Session) -> Result<Vec<DbObject>, String> {
-    return match &session.engine {
+    match &session.engine {
         Engine::Postgres(_) => postgres_objects(session).await,
         Engine::Sqlite(_) => sqlite_objects(session).await,
         Engine::MySql(_) => mysql_objects(session).await,
         // the rest expose no catalog beyond their tables
         _ => Ok(Vec::new()),
-    };
+    }
 }

@@ -1,7 +1,12 @@
+use std::sync::atomic::Ordering;
+
 use serde::Serialize;
 use serde_json::Value;
 
-use super::db::{query, reads_only, Engine, QueryResult, Session};
+use super::access::single_read;
+use super::backends;
+use super::db::{query, query_postgres, Engine, QueryResult, Session};
+use super::errors::friendly_pg;
 
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -22,14 +27,13 @@ pub struct Plan {
 }
 
 fn number(node: &Value, key: &str) -> Option<f64> {
-    return node.get(key).and_then(Value::as_f64);
+    node.get(key).and_then(Value::as_f64)
 }
 
 fn text_of(node: &Value, key: &str) -> Option<String> {
-    return node
-        .get(key)
+    node.get(key)
         .and_then(Value::as_str)
-        .map(|value| value.to_string());
+        .map(|value| value.to_string())
 }
 
 fn shape_postgres(node: &Value) -> PlanNode {
@@ -39,16 +43,22 @@ fn shape_postgres(node: &Value) -> PlanNode {
         label = format!("{label} on {relation}");
     }
 
-    let detail = ["Filter", "Index Cond", "Hash Cond", "Join Filter", "Sort Key"]
-        .iter()
-        .filter_map(|key| {
-            node.get(key).map(|value| match value.as_str() {
-                Some(text) => format!("{key}: {text}"),
-                None => format!("{key}: {value}"),
-            })
+    let detail = [
+        "Filter",
+        "Index Cond",
+        "Hash Cond",
+        "Join Filter",
+        "Sort Key",
+    ]
+    .iter()
+    .filter_map(|key| {
+        node.get(key).map(|value| match value.as_str() {
+            Some(text) => format!("{key}: {text}"),
+            None => format!("{key}: {value}"),
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
 
     let children = node
         .get("Plans")
@@ -56,18 +66,18 @@ fn shape_postgres(node: &Value) -> PlanNode {
         .map(|items| items.iter().map(shape_postgres).collect())
         .unwrap_or_default();
 
-    return PlanNode {
+    PlanNode {
         label,
         detail,
         rows: number(node, "Actual Rows").or_else(|| number(node, "Plan Rows")),
         cost: number(node, "Total Cost"),
         time: number(node, "Actual Total Time"),
         children,
-    };
+    }
 }
 
 fn flat(result: &QueryResult) -> String {
-    return result
+    result
         .rows
         .iter()
         .map(|row| {
@@ -77,21 +87,20 @@ fn flat(result: &QueryResult) -> String {
                 .join(" | ")
         })
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
 }
 
 // sqlite reports a flat list with parent ids rather than nesting, so rebuild
 // the shape the viewer expects
 fn branch(parent: i64, rows: &[(i64, i64, String)]) -> Vec<PlanNode> {
-    return rows
-        .iter()
+    rows.iter()
         .filter(|(_, owner, _)| *owner == parent)
         .map(|(id, _, label)| PlanNode {
             label: label.clone(),
             children: branch(*id, rows),
             ..Default::default()
         })
-        .collect();
+        .collect()
 }
 
 fn shape_sqlite(result: &QueryResult) -> Option<PlanNode> {
@@ -117,34 +126,34 @@ fn shape_sqlite(result: &QueryResult) -> Option<PlanNode> {
         return None;
     }
 
-    return Some(PlanNode {
+    Some(PlanNode {
         label: "query plan".into(),
         children: top,
         ..Default::default()
-    });
+    })
 }
 
 // datafusion answers with one row per plan and keeps the whole plan, already
 // indented, in the last cell of that row
 fn plans(result: &QueryResult) -> String {
-    return result
+    result
         .rows
         .iter()
         .filter_map(|row| row.last().cloned().flatten())
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
 }
 
 fn shape_datafusion(text: &str) -> Option<PlanNode> {
     let mut stack: Vec<(usize, PlanNode)> = Vec::new();
     let mut roots: Vec<PlanNode> = Vec::new();
 
-    fn close(
-        depth: usize,
-        stack: &mut Vec<(usize, PlanNode)>,
-        roots: &mut Vec<PlanNode>,
-    ) {
-        while stack.last().map(|(open, _)| *open >= depth).unwrap_or(false) {
+    fn close(depth: usize, stack: &mut Vec<(usize, PlanNode)>, roots: &mut Vec<PlanNode>) {
+        while stack
+            .last()
+            .map(|(open, _)| *open >= depth)
+            .unwrap_or(false)
+        {
             let (_, done) = stack.pop().unwrap();
 
             match stack.last_mut() {
@@ -189,32 +198,43 @@ fn shape_datafusion(text: &str) -> Option<PlanNode> {
         return None;
     }
 
-    return Some(PlanNode {
+    Some(PlanNode {
         label: "query plan".into(),
         children: roots,
         ..Default::default()
-    });
+    })
 }
 
-pub async fn explain(
-    session: &Session,
-    sql: &str,
-    analyze: bool,
-) -> Result<Plan, String> {
-    // analyze really runs the statement, so an insert would be applied for the
-    // sake of timing it
-    if analyze && !reads_only(sql) {
-        return Err("only a read can be timed with analyze".into());
+pub async fn explain(session: &Session, sql: &str, analyze: bool) -> Result<Plan, String> {
+    let backend = backends::find(&session.flavour);
+
+    if !backend.is_some_and(|backend| backend.explain) {
+        return Err("this engine does not explain queries".into());
     }
 
-    return match &session.engine {
-        Engine::Postgres(_) => {
+    if analyze && !backend.is_some_and(|backend| backend.analyze) {
+        return Err("this engine can not time a query with analyze".into());
+    }
+
+    // analyze really runs the statement, so an insert would be applied for the
+    // sake of timing it
+    if analyze && !single_read(&session.flavour, sql) {
+        return Err("only a single read can be timed with analyze".into());
+    }
+
+    match &session.engine {
+        Engine::Postgres(client) => {
             let mode = if analyze {
                 "analyze, buffers, format json"
             } else {
                 "format json"
             };
-            let result = query(session, &format!("explain ({mode}) {sql}")).await?;
+            let asked = format!("explain ({mode}) {sql}");
+            let result = if analyze {
+                contained(session, client, &asked).await?
+            } else {
+                query(session, &asked).await?
+            };
             let raw = result
                 .rows
                 .first()
@@ -222,8 +242,7 @@ pub async fn explain(
                 .and_then(|cell| cell.clone())
                 .unwrap_or_default();
 
-            let parsed: Value =
-                serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+            let parsed: Value = serde_json::from_str(&raw).map_err(|error| error.to_string())?;
             let root = parsed
                 .as_array()
                 .and_then(|items| items.first())
@@ -259,7 +278,11 @@ pub async fn explain(
             })
         }
         Engine::Driver(_) if session.kind == "influxdb" => {
-            let mode = if analyze { "explain analyze" } else { "explain" };
+            let mode = if analyze {
+                "explain analyze"
+            } else {
+                "explain"
+            };
             let result = query(session, &format!("{mode} {sql}")).await?;
             let text = plans(&result);
 
@@ -269,7 +292,35 @@ pub async fn explain(
             })
         }
         _ => Err("this engine does not explain queries".into()),
+    }
+}
+
+// the statement really runs under analyze, so it runs in a read-only
+// transaction, or a savepoint inside the open one, that is always rolled back
+async fn contained(
+    session: &Session,
+    client: &tokio_postgres::Client,
+    sql: &str,
+) -> Result<QueryResult, String> {
+    let _guard = session.tx_lock.lock().await;
+    let nested = session.open_tx.load(Ordering::Relaxed);
+
+    let (open, close) = if nested {
+        (
+            "savepoint gpql_explain",
+            "rollback to savepoint gpql_explain; release savepoint gpql_explain",
+        )
+    } else {
+        ("begin transaction read only", "rollback")
     };
+
+    client.batch_execute(open).await.map_err(friendly_pg)?;
+
+    let result = query_postgres(client, sql).await;
+
+    client.batch_execute(close).await.map_err(friendly_pg)?;
+
+    result
 }
 
 #[cfg(test)]
@@ -286,7 +337,10 @@ mod datafusion {
         assert_eq!(tree.label, "ProjectionExec: expr=[a]");
         assert_eq!(tree.children.len(), 1);
         assert_eq!(tree.children[0].detail, "[output_rows=3]");
-        assert_eq!(tree.children[0].children[0].label, "ParquetExec: file_groups={1 group}");
+        assert_eq!(
+            tree.children[0].children[0].label,
+            "ParquetExec: file_groups={1 group}"
+        );
     }
 
     // captured from influxdb 3.8.3 answering `explain analyze select house,

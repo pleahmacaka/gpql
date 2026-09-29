@@ -1,29 +1,64 @@
+use mysql_async::consts::ColumnType;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Opts, OptsBuilder, Row, Value};
+use mysql_async::{Column, Conn, DriverError, Opts, OptsBuilder, Params, Row, SslOpts, Value};
 use tokio::sync::Mutex;
 
-use crate::engines::db::{QueryResult, SessionConfig, TableInfo};
+use crate::engines::db::{hex, install_crypto, port_or, QueryResult, SessionConfig, TableInfo};
 
 pub struct MySql {
     connection: Mutex<Conn>,
+    id: u32,
+    opts: Opts,
 }
 
 impl MySql {
     pub async fn open(config: &SessionConfig) -> Result<Self, String> {
-        let port = config.port.parse::<u16>().unwrap_or(3306);
-        let opts: Opts = OptsBuilder::default()
-            .ip_or_hostname(if config.host.is_empty() {
-                "127.0.0.1".to_string()
-            } else {
-                config.host.clone()
-            })
-            .tcp_port(port)
+        let host = if config.host.is_empty() {
+            "127.0.0.1".to_string()
+        } else {
+            config.host.clone()
+        };
+        let dial = if config.dial.is_empty() {
+            host.clone()
+        } else {
+            config.dial.clone()
+        };
+
+        let base = OptsBuilder::default()
+            .ip_or_hostname(dial)
+            .tcp_port(port_or(&config.port, 3306)?)
             .user(Some(config.user.clone()))
             .pass(Some(config.password.clone()))
-            .db_name(Some(config.database.clone()))
-            .into();
+            .db_name(Some(config.database.clone()));
 
-        let mut connection = Conn::new(opts).await.map_err(friendly)?;
+        let tunnelled = !config.dial.is_empty();
+        let secured = |verify: bool| {
+            install_crypto();
+
+            base.clone().ssl_opts(Some(
+                SslOpts::default()
+                    .with_danger_accept_invalid_certs(!verify)
+                    .with_danger_skip_domain_validation(!verify)
+                    .with_danger_tls_hostname_override(tunnelled.then(|| host.clone())),
+            ))
+        };
+
+        // prefer only drops to plaintext when the server says it has no TLS,
+        // which it does before any credential is sent
+        let connected = match config.tls.as_str() {
+            "disable" => Conn::new(base.clone()).await,
+            "require" => Conn::new(secured(false)).await,
+            "verify-full" => Conn::new(secured(true)).await,
+            "" | "prefer" => match Conn::new(secured(false)).await {
+                Err(mysql_async::Error::Driver(DriverError::NoClientSslFlagFromServer)) => {
+                    Conn::new(base.clone()).await
+                }
+                other => other,
+            },
+            other => return Err(format!("{other} is not a TLS mode GPQL knows")),
+        };
+
+        let mut connection = connected.map_err(friendly)?;
 
         if config.read_only {
             connection
@@ -32,39 +67,84 @@ impl MySql {
                 .map_err(friendly)?;
         }
 
-        return Ok(MySql {
+        Ok(MySql {
+            id: connection.id(),
+            opts: connection.opts().clone(),
             connection: Mutex::new(connection),
-        });
+        })
+    }
+
+    // the session's own connection is busy with the query, so the kill has to
+    // arrive over a second one
+    pub async fn cancel(&self) -> Result<(), String> {
+        let mut side = Conn::new(self.opts.clone()).await.map_err(friendly)?;
+
+        side.query_drop(format!("kill query {}", self.id))
+            .await
+            .map_err(friendly)?;
+
+        side.disconnect().await.map_err(friendly)
     }
 
     pub async fn query(&self, sql: &str) -> Result<QueryResult, String> {
         let mut connection = self.connection.lock().await;
-        let rows: Vec<Row> = connection.query(sql).await.map_err(friendly)?;
+        let mut answer = connection.query_iter(sql).await.map_err(friendly)?;
 
-        let columns = rows
-            .first()
-            .map(|row| {
-                row.columns_ref()
-                    .iter()
-                    .map(|column| column.name_str().to_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut columns: Vec<String> = Vec::new();
+        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
 
-        let shaped = rows
-            .into_iter()
-            .map(|row| {
-                (0..row.len())
-                    .map(|index| row.as_ref(index).map(text_of).unwrap_or(None))
-                    .collect::<Vec<_>>()
+        while !answer.is_empty() {
+            let described = answer.columns();
+            let batch: Vec<Row> = answer.collect().await.map_err(friendly)?;
+
+            let Some(described) = described.filter(|described| !described.is_empty()) else {
+                continue;
+            };
+
+            let binary: Vec<bool> = described.iter().map(binary).collect();
+
+            columns = described
+                .iter()
+                .map(|column| column.name_str().to_string())
+                .collect();
+            rows = batch
+                .into_iter()
+                .map(|row| {
+                    (0..row.len())
+                        .map(|index| {
+                            row.as_ref(index)
+                                .and_then(|value| text_of(value, binary[index]))
+                        })
+                        .collect()
+                })
+                .collect();
+        }
+
+        let affected = answer.affected_rows();
+
+        Ok(QueryResult {
+            columns,
+            rows,
+            affected: Some(affected),
+        })
+    }
+
+    pub async fn execute(&self, sql: &str, values: &[Option<String>]) -> Result<u64, String> {
+        let mut connection = self.connection.lock().await;
+        let params: Vec<Value> = values
+            .iter()
+            .map(|value| match value {
+                None => Value::NULL,
+                Some(text) => Value::Bytes(text.as_bytes().to_vec()),
             })
             .collect();
 
-        return Ok(QueryResult {
-            columns,
-            rows: shaped,
-            affected: Some(connection.affected_rows()),
-        });
+        connection
+            .exec_drop(sql, Params::Positional(params))
+            .await
+            .map_err(friendly)?;
+
+        Ok(connection.affected_rows())
     }
 
     pub async fn tables(&self) -> Result<Vec<TableInfo>, String> {
@@ -77,7 +157,7 @@ impl MySql {
             )
             .await?;
 
-        return Ok(result
+        Ok(result
             .rows
             .into_iter()
             .map(|row| TableInfo {
@@ -89,15 +169,18 @@ impl MySql {
                     .and_then(|count| count.parse().ok())
                     .unwrap_or(0),
             })
-            .collect());
+            .collect())
     }
 
     pub async fn columns(&self) -> Result<QueryResult, String> {
-        return self
-            .query(
-                "select c.table_name, c.column_name, c.data_type,
+        self.query(
+            "select c.table_name, c.column_name, c.data_type,
                         c.is_nullable, c.column_key,
-                        k.referenced_table_name, k.referenced_column_name
+                        case when k.referenced_table_schema = c.table_schema
+                             then k.referenced_table_name
+                             else concat(k.referenced_table_schema, '.',
+                                         k.referenced_table_name) end,
+                        k.referenced_column_name
                  from information_schema.columns c
                  left join information_schema.key_column_usage k
                    on k.table_schema = c.table_schema
@@ -106,29 +189,45 @@ impl MySql {
                   and k.referenced_table_name is not null
                  where c.table_schema = database()
                  order by c.table_name, c.ordinal_position",
-            )
-            .await;
+        )
+        .await
     }
 }
 
-fn text_of(value: &Value) -> Option<String> {
-    return match value {
+// numbers and dates also report the binary character set, so only the
+// string and blob types count as raw bytes
+fn binary(column: &Column) -> bool {
+    let raw = matches!(
+        column.column_type(),
+        ColumnType::MYSQL_TYPE_STRING
+            | ColumnType::MYSQL_TYPE_VAR_STRING
+            | ColumnType::MYSQL_TYPE_VARCHAR
+            | ColumnType::MYSQL_TYPE_TINY_BLOB
+            | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+            | ColumnType::MYSQL_TYPE_LONG_BLOB
+            | ColumnType::MYSQL_TYPE_BLOB
+    );
+
+    (raw && column.character_set() == 63)
+        || matches!(
+            column.column_type(),
+            ColumnType::MYSQL_TYPE_GEOMETRY | ColumnType::MYSQL_TYPE_BIT
+        )
+}
+
+fn text_of(value: &Value, binary: bool) -> Option<String> {
+    match value {
         Value::NULL => None,
+        Value::Bytes(bytes) if binary => Some(hex(bytes)),
         Value::Bytes(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
         Value::Int(number) => Some(number.to_string()),
         Value::UInt(number) => Some(number.to_string()),
         Value::Float(number) => Some(number.to_string()),
         Value::Double(number) => Some(number.to_string()),
         other => Some(format!("{other:?}")),
-    };
+    }
 }
 
 fn friendly(error: mysql_async::Error) -> String {
-    let text = error.to_string();
-
-    if text.contains("Access denied") {
-        return "wrong user or password".into();
-    }
-
-    return text;
+    error.to_string()
 }

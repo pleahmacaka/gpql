@@ -3,67 +3,79 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 
 use super::db::{
-    query_postgres, query_sqlite, quote_ident, ColumnInfo, Engine, QueryResult,
-    Session, TableInfo, TableSchema,
+    held, query_sqlite, quote_ident, read, with_sqlite, ColumnInfo, Engine, QueryResult, Session,
+    TableInfo, TableSchema,
 };
 
 pub async fn tables(session: &Session) -> Result<Vec<TableInfo>, String> {
     match &session.engine {
-        Engine::Postgres(client) => {
-            let result = query_postgres(
-                client,
+        Engine::Postgres(_) => {
+            // a partitioned table is relkind p, and its partitions are plain
+            // tables that would otherwise be listed beside it
+            let listing = if session.flavour == "greptimedb" {
                 "select c.relname, coalesce(s.n_live_tup, 0)::text
                  from pg_class c
                  join pg_namespace n on n.oid = c.relnamespace
                  left join pg_stat_user_tables s on s.relid = c.oid
                  where c.relkind = 'r' and n.nspname = current_schema()
-                 order by c.relname",
-            )
-            .await?;
+                 order by c.relname"
+            } else {
+                "select c.relname, coalesce(s.n_live_tup, 0)::text
+                 from pg_class c
+                 join pg_namespace n on n.oid = c.relnamespace
+                 left join pg_stat_user_tables s on s.relid = c.oid
+                 where c.relkind in ('r', 'p') and not c.relispartition
+                   and n.nspname = current_schema()
+                 order by c.relname"
+            };
 
-            return Ok(result
+            let result = read(session, listing).await?;
+
+            Ok(result
                 .rows
                 .into_iter()
                 .map(|row| TableInfo {
                     name: row[0].clone().unwrap_or_default(),
                     rows: row[1].as_deref().unwrap_or("0").parse().unwrap_or(0),
                 })
-                .collect());
+                .collect())
         }
-        Engine::Sqlite(connection) => {
-            let connection = connection.lock().unwrap();
-            let names = query_sqlite(
-                &connection,
-                "select name from sqlite_master
-                 where type = 'table' and name not like 'sqlite_%'
-                 order by name",
-            )?;
-
-            let mut out = Vec::new();
-
-            for row in names.rows {
-                let name = row[0].clone().unwrap_or_default();
-                let counted = query_sqlite(
-                    &connection,
-                    &format!("select count(*) from {}", quote_ident(&name)),
-                )?;
-                let rows = counted.rows[0][0]
-                    .as_deref()
-                    .unwrap_or("0")
-                    .parse()
-                    .unwrap_or(0);
-
-                out.push(TableInfo { name, rows });
-            }
-
-            return Ok(out);
-        }
+        Engine::Sqlite(connection) => with_sqlite(connection, sqlite_tables).await,
         Engine::MySql(client) => client.tables().await,
-        Engine::Duck(duck) => duck.tables(),
+        Engine::Duck(duck) => duck.tables().await,
         Engine::Http(remote) => remote.tables().await,
         Engine::Driver(driver) => driver.tables().await,
         Engine::Graph(graph) => graph.tables().await,
     }
+}
+
+fn sqlite_tables(connection: &Connection) -> Result<Vec<TableInfo>, String> {
+    let names = query_sqlite(
+        connection,
+        "select name from sqlite_master
+         where type = 'table' and name not like 'sqlite_%'
+         order by name",
+    )?;
+
+    let mut out = Vec::new();
+
+    for row in names.rows {
+        let name = row[0].clone().unwrap_or_default();
+        let counted = query_sqlite(
+            connection,
+            &format!("select count(*) from {}", quote_ident(&name)),
+        )?;
+        let rows = counted
+            .rows
+            .first()
+            .and_then(|row| row.first().cloned().flatten())
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(0);
+
+        out.push(TableInfo { name, rows });
+    }
+
+    Ok(out)
 }
 
 pub async fn schema(session: &Session) -> Result<Vec<TableSchema>, String> {
@@ -74,15 +86,14 @@ pub async fn schema(session: &Session) -> Result<Vec<TableSchema>, String> {
         .collect();
 
     let mut out = match &session.engine {
-        Engine::Postgres(client) => {
-            let mut tables = postgres_schema(client).await?;
-            let notes = postgres_notes(client).await.unwrap_or_default();
+        Engine::Postgres(_) => {
+            let mut tables = postgres_schema(session).await?;
+            let notes = postgres_notes(session).await.unwrap_or_default();
 
             for (table, column, raw) in notes {
                 let (text, hints) = annotation(&raw);
 
-                let Some(found) = tables.iter_mut().find(|entry| entry.name == table)
-                else {
+                let Some(found) = tables.iter_mut().find(|entry| entry.name == table) else {
                     continue;
                 };
 
@@ -92,30 +103,33 @@ pub async fn schema(session: &Session) -> Result<Vec<TableSchema>, String> {
                     continue;
                 }
 
-                if let Some(target) =
-                    found.columns.iter_mut().find(|entry| entry.name == column)
-                {
+                if let Some(target) = found.columns.iter_mut().find(|entry| entry.name == column) {
                     target.note = text.or(Some(raw));
                     found.hints.extend(hints);
                 }
             }
 
-            for (table, line) in postgres_guards(client).await? {
-                if let Some(found) =
-                    tables.iter_mut().find(|entry| entry.name == table)
-                {
+            for (table, line) in postgres_guards(session).await {
+                if let Some(found) = tables.iter_mut().find(|entry| entry.name == table) {
                     found.policies.push(line);
                 }
             }
 
             tables
         }
-        Engine::Sqlite(connection) => sqlite_schema(&connection.lock().unwrap(), &counts)?,
+        Engine::Sqlite(connection) => {
+            let names = counts.keys().cloned().collect::<Vec<_>>();
+
+            with_sqlite(connection, move |connection| {
+                sqlite_schema(connection, names)
+            })
+            .await?
+        }
         Engine::MySql(client) => mysql_schema(client.columns().await?),
         Engine::Http(remote) if remote.flavour == "supabase_api" => {
             mysql_schema(remote.columns().await?)
         }
-        Engine::Duck(duck) => mysql_schema(duck.columns()?),
+        Engine::Duck(duck) => mysql_schema(duck.columns().await?),
         Engine::Driver(driver) => match driver.columns().await? {
             Some(listing) => mysql_schema(listing),
             None => bare(&counts),
@@ -127,14 +141,14 @@ pub async fn schema(session: &Session) -> Result<Vec<TableSchema>, String> {
         table.rows = *counts.get(&table.name).unwrap_or(&0);
     }
 
-    return Ok(out);
+    Ok(out)
 }
 
 pub async fn schemas(session: &Session) -> Result<Vec<String>, String> {
     match &session.engine {
-        Engine::Postgres(client) => {
-            let result = query_postgres(
-                client,
+        Engine::Postgres(_) => {
+            let result = read(
+                session,
                 "select nspname from pg_namespace
                  where nspname not like 'pg\\_%'
                    and nspname <> 'information_schema'
@@ -142,11 +156,11 @@ pub async fn schemas(session: &Session) -> Result<Vec<String>, String> {
             )
             .await?;
 
-            return Ok(result
+            Ok(result
                 .rows
                 .into_iter()
                 .filter_map(|row| row[0].clone())
-                .collect());
+                .collect())
         }
         // every other engine exposes a single schema, so there is nothing to pick
         _ => Ok(Vec::new()),
@@ -155,38 +169,45 @@ pub async fn schemas(session: &Session) -> Result<Vec<String>, String> {
 
 pub async fn use_schema(session: &Session, name: &str) -> Result<(), String> {
     match &session.engine {
-        Engine::Postgres(client) => {
-            query_postgres(
-                client,
+        Engine::Postgres(_) => {
+            read(
+                session,
                 &format!("set search_path to {}", quote_ident(name)),
             )
             .await?;
 
-            return Ok(());
+            *held(&session.search_path) = Some(name.to_string());
+            held(&session.order_keys).clear();
+
+            Ok(())
         }
         _ => Err("this engine has a single schema".into()),
     }
 }
 
-async fn postgres_guards(
-    client: &tokio_postgres::Client,
-) -> Result<Vec<(String, String)>, String> {
-    let policies = query_postgres(
-        client,
+// greptimedb and older servers have no pg_policies or pg_rules, and a missing
+// catalog should cost the policy lines, not the whole schema
+async fn postgres_guards(session: &Session) -> Vec<(String, String)> {
+    let policies = read(
+        session,
         "select tablename, policyname, coalesce(cmd, 'ALL')
          from pg_policies where schemaname = current_schema()",
     )
-    .await?;
-    let rules = query_postgres(
-        client,
+    .await
+    .map(|result| result.rows)
+    .unwrap_or_default();
+    let rules = read(
+        session,
         "select tablename, rulename from pg_rules
          where schemaname = current_schema() and rulename <> '_RETURN'",
     )
-    .await?;
+    .await
+    .map(|result| result.rows)
+    .unwrap_or_default();
 
     let mut out = Vec::new();
 
-    for row in policies.rows {
+    for row in policies {
         out.push((
             row[0].clone().unwrap_or_default(),
             format!(
@@ -197,41 +218,82 @@ async fn postgres_guards(
         ));
     }
 
-    for row in rules.rows {
+    for row in rules {
         out.push((
             row[0].clone().unwrap_or_default(),
             format!("rule {}", row[1].clone().unwrap_or_default()),
         ));
     }
 
-    return Ok(out);
+    out
 }
 
-async fn postgres_schema(client: &tokio_postgres::Client) -> Result<Vec<TableSchema>, String> {
-    let columns = query_postgres(
-        client,
-        "select table_name, column_name, data_type, is_nullable
-         from information_schema.columns
-         where table_schema = current_schema()
-         order by table_name, ordinal_position",
+// the key columns pair up by position in conkey and confkey, which is the
+// only way a composite foreign key maps each column to the right target
+const POSTGRES_KEYS: &str = "
+    select 'PRIMARY KEY', t.relname, a.attname, null, null
+    from pg_constraint k
+    join pg_class t on t.oid = k.conrelid
+    join pg_namespace n on n.oid = t.relnamespace
+    join pg_attribute a on a.attrelid = k.conrelid and a.attnum = any(k.conkey)
+    where k.contype = 'p' and n.nspname = current_schema()
+    union all
+    select 'FOREIGN KEY', t.relname, a.attname,
+           case when r.relnamespace = t.relnamespace then r.relname
+                else rn.nspname || '.' || r.relname end,
+           ra.attname
+    from pg_constraint k
+    join pg_class t on t.oid = k.conrelid
+    join pg_namespace n on n.oid = t.relnamespace
+    join pg_class r on r.oid = k.confrelid
+    join pg_namespace rn on rn.oid = r.relnamespace
+    cross join lateral unnest(k.conkey, k.confkey) as pair(own, other)
+    join pg_attribute a on a.attrelid = k.conrelid and a.attnum = pair.own
+    join pg_attribute ra on ra.attrelid = k.confrelid and ra.attnum = pair.other
+    where k.contype = 'f' and n.nspname = current_schema()";
+
+// format_type names the column the way ddl spells it, arrays, enums and
+// domains included, and schema-qualifies a type outside the search path
+const POSTGRES_COLUMNS: &str = "
+    select c.relname, a.attname, format_type(a.atttypid, a.atttypmod),
+           case when a.attnotnull then 'NO' else 'YES' end
+    from pg_attribute a
+    join pg_class c on c.oid = a.attrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = current_schema()
+      and c.relkind in ('r', 'p', 'v', 'm', 'f')
+      and not c.relispartition
+      and a.attnum > 0
+      and not a.attisdropped
+    order by c.relname, a.attnum";
+
+const GREPTIME_COLUMNS: &str = "
+    select table_name, column_name, data_type, is_nullable
+    from information_schema.columns
+    where table_schema = current_schema()
+    order by table_name, ordinal_position";
+
+async fn postgres_schema(session: &Session) -> Result<Vec<TableSchema>, String> {
+    let greptime = session.flavour == "greptimedb";
+    let columns = read(
+        session,
+        if greptime {
+            GREPTIME_COLUMNS
+        } else {
+            POSTGRES_COLUMNS
+        },
     )
     .await?;
 
-    let keys = query_postgres(
-        client,
-        "select tc.constraint_type, kcu.table_name, kcu.column_name,
-                ccu.table_name as target_table, ccu.column_name as target_column
-         from information_schema.table_constraints tc
-         join information_schema.key_column_usage kcu
-           on kcu.constraint_name = tc.constraint_name
-          and kcu.table_schema = tc.table_schema
-         left join information_schema.constraint_column_usage ccu
-           on ccu.constraint_name = tc.constraint_name
-          and ccu.table_schema = tc.table_schema
-         where tc.table_schema = current_schema()
-           and tc.constraint_type in ('PRIMARY KEY', 'FOREIGN KEY')",
-    )
-    .await?;
+    let keys = if greptime {
+        QueryResult {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected: None,
+        }
+    } else {
+        read(session, POSTGRES_KEYS).await?
+    };
 
     let mut primary = std::collections::HashSet::new();
     let mut foreign: HashMap<(String, String), String> = HashMap::new();
@@ -249,7 +311,9 @@ async fn postgres_schema(client: &tokio_postgres::Client) -> Result<Vec<TableSch
         let target_table = row[3].clone().unwrap_or_default();
         let target_column = row[4].clone().unwrap_or_default();
 
-        foreign.insert((table, column), format!("{target_table}.{target_column}"));
+        foreign
+            .entry((table, column))
+            .or_insert_with(|| format!("{target_table}.{target_column}"));
     }
 
     let mut grouped: Vec<TableSchema> = Vec::new();
@@ -260,14 +324,22 @@ async fn postgres_schema(client: &tokio_postgres::Client) -> Result<Vec<TableSch
         let data_type = row[2].clone().unwrap_or_default();
         let required = row[3].as_deref() == Some("NO");
 
-        if grouped.last().map(|last| last.name != table).unwrap_or(true) {
+        if grouped
+            .last()
+            .map(|last| last.name != table)
+            .unwrap_or(true)
+        {
             grouped.push(TableSchema {
                 name: table.clone(),
                 ..Default::default()
             });
         }
 
-        grouped.last_mut().unwrap().columns.push(ColumnInfo {
+        let Some(current) = grouped.last_mut() else {
+            continue;
+        };
+
+        current.columns.push(ColumnInfo {
             primary_key: primary.contains(&(table.clone(), name.clone())),
             references: foreign.get(&(table.clone(), name.clone())).cloned(),
             name,
@@ -277,7 +349,7 @@ async fn postgres_schema(client: &tokio_postgres::Client) -> Result<Vec<TableSch
         });
     }
 
-    return Ok(grouped);
+    Ok(grouped)
 }
 
 pub fn annotation(raw: &str) -> (Option<String>, Vec<String>) {
@@ -295,33 +367,36 @@ pub fn annotation(raw: &str) -> (Option<String>, Vec<String>) {
         return (None, Vec::new());
     };
 
-    let hints = text
-        .split_whitespace()
-        .filter_map(|word| word.strip_prefix("@ref"))
-        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '.'))
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    let follows_ref = |index: usize| index > 0 && words[index - 1] == "@ref";
+
+    let hints = words
+        .iter()
+        .enumerate()
+        .filter_map(|(index, word)| match word.strip_prefix("@ref:") {
+            Some(target) => Some(target),
+            None if follows_ref(index) => Some(*word),
+            None => None,
+        })
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'))
         .filter(|word| word.contains('.'))
         .map(str::to_string)
         .collect::<Vec<_>>();
 
-    let extra = text
-        .split_whitespace()
+    let extra = words
+        .iter()
         .enumerate()
-        .filter(|(index, word)| {
-            !word.starts_with("@ref")
-                && !(*index > 0 && text.split_whitespace().nth(index - 1) == Some("@ref"))
-        })
-        .map(|(_, word)| word)
+        .filter(|(index, word)| !word.starts_with("@ref") && !follows_ref(*index))
+        .map(|(_, word)| *word)
         .collect::<Vec<_>>()
         .join(" ");
 
-    return (Some(extra.trim().to_string()), hints);
+    (Some(extra.trim().to_string()), hints)
 }
 
-async fn postgres_notes(
-    client: &tokio_postgres::Client,
-) -> Result<Vec<(String, String, String)>, String> {
-    let listing = query_postgres(
-        client,
+async fn postgres_notes(session: &Session) -> Result<Vec<(String, String, String)>, String> {
+    let listing = read(
+        session,
         "select c.relname, coalesce(a.attname, ''), d.description
          from pg_description d
          join pg_class c on c.oid = d.objoid
@@ -332,7 +407,7 @@ async fn postgres_notes(
     )
     .await?;
 
-    return Ok(listing
+    Ok(listing
         .rows
         .into_iter()
         .map(|row| {
@@ -342,20 +417,20 @@ async fn postgres_notes(
                 row[2].clone().unwrap_or_default(),
             )
         })
-        .collect());
+        .collect())
 }
 
 fn bare(counts: &HashMap<String, i64>) -> Vec<TableSchema> {
     let mut names: Vec<&String> = counts.keys().collect();
     names.sort();
 
-    return names
+    names
         .into_iter()
         .map(|name| TableSchema {
             name: name.clone(),
             ..Default::default()
         })
-        .collect();
+        .collect()
 }
 
 fn mysql_schema(listing: QueryResult) -> Vec<TableSchema> {
@@ -365,7 +440,11 @@ fn mysql_schema(listing: QueryResult) -> Vec<TableSchema> {
         let cell = |index: usize| row.get(index).cloned().flatten().unwrap_or_default();
         let table = cell(0);
 
-        if grouped.last().map(|last| last.name != table).unwrap_or(true) {
+        if grouped
+            .last()
+            .map(|last| last.name != table)
+            .unwrap_or(true)
+        {
             grouped.push(TableSchema {
                 name: table.clone(),
                 ..Default::default()
@@ -374,7 +453,11 @@ fn mysql_schema(listing: QueryResult) -> Vec<TableSchema> {
 
         let target = cell(5);
 
-        grouped.last_mut().unwrap().columns.push(ColumnInfo {
+        let Some(current) = grouped.last_mut() else {
+            continue;
+        };
+
+        current.columns.push(ColumnInfo {
             name: cell(1),
             data_type: cell(2),
             required: cell(3) == "NO",
@@ -388,14 +471,13 @@ fn mysql_schema(listing: QueryResult) -> Vec<TableSchema> {
         });
     }
 
-    return grouped;
+    grouped
 }
 
 fn sqlite_schema(
     connection: &Connection,
-    counts: &HashMap<String, i64>,
+    mut names: Vec<String>,
 ) -> Result<Vec<TableSchema>, String> {
-    let mut names: Vec<&String> = counts.keys().collect();
     names.sort();
 
     let mut out = Vec::new();
@@ -403,11 +485,11 @@ fn sqlite_schema(
     for name in names {
         let info = query_sqlite(
             connection,
-            &format!("pragma table_info({})", quote_ident(name)),
+            &format!("pragma table_info({})", quote_ident(&name)),
         )?;
         let links = query_sqlite(
             connection,
-            &format!("pragma foreign_key_list({})", quote_ident(name)),
+            &format!("pragma foreign_key_list({})", quote_ident(&name)),
         )?;
 
         let mut foreign: HashMap<String, String> = HashMap::new();
@@ -438,11 +520,11 @@ fn sqlite_schema(
             .collect();
 
         out.push(TableSchema {
-            name: name.clone(),
+            name,
             columns,
             ..Default::default()
         });
     }
 
-    return Ok(out);
+    Ok(out)
 }
