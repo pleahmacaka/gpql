@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "svelte": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
@@ -25,9 +28,12 @@
   },
   "devDependencies": {
     "@iconify-json/lucide": "^1.2.125",
-    "@iconify-json/simple-icons": "^1.2.93"
+    "@iconify-json/simple-icons": "^1.2.93",
+    "svelte-check": "^4.7.6",
+    "typescript": "^6.0.3"
   },
   "scripts": {
+    "check": "svelte-check --tsconfig ./tsconfig.json",
     "icons": "bun run ../../packages/ui/scripts/pick-icons.ts"
   }
 }
