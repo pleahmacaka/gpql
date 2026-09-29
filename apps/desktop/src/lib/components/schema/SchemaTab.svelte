@@ -1,28 +1,54 @@
 <script lang="ts">
-  import * as m from "$lib/paraglide/messages"
-
+  import {
+    arrive,
+    board,
+    depart,
+    EmptyState,
+    Icon,
+    Panel,
+    relationCount,
+    Segmented,
+    tooltip,
+    veil,
+  } from "@gpql/ui"
   import { SvelteFlowProvider } from "@xyflow/svelte"
+  import { untrack } from "svelte"
+  import { fade } from "svelte/transition"
 
   import TableList from "$lib/components/data/TableList.svelte"
-  import { workspace } from "$lib/session/workspace.svelte"
-
   import FindBar from "$lib/components/shell/FindBar.svelte"
   import TabLayout from "$lib/components/shell/TabLayout.svelte"
+  import * as m from "$lib/paraglide/messages"
+  import { workspace } from "$lib/session/workspace.svelte"
 
-  import { Icon, board, relationCount } from "@gpql/ui"
   import DiffPanel from "./DiffPanel.svelte"
   import SchemaBoard from "./SchemaBoard.svelte"
   import SharePanel from "./SharePanel.svelte"
 
+  let view = $state("board")
+  let sharing = $state(false)
+  let opener = $state<HTMLButtonElement | null>(null)
+  let describing = $state<AbortController | null>(null)
+
+  let here = $derived(workspace.active)
+  let phase = $derived(here?.schemaState ?? "idle")
+  let filled = $derived(workspace.schema.length > 0)
+  let comparing = $derived(workspace.connections.length > 1)
+  let diffing = $derived(view === "diff" && comparing)
+  let shown = $derived(workspace.tab === "schema")
   let relations = $derived(relationCount(workspace.schema))
 
-  let diffing = $state(false)
-  let sharing = $state(false)
-  let describing = $state<AbortController | null>(null)
+  $effect(() => {
+    const target = here
+
+    if (shown && target?.schemaState === "idle") {
+      untrack(() => void target.loadSchema())
+    }
+  })
 
   async function annotate() {
     const provider = workspace.model
-    const here = workspace.active
+    const target = here
 
     if (describing) {
       describing.abort()
@@ -30,7 +56,7 @@
       return
     }
 
-    if (!provider || !here) {
+    if (!provider || !target) {
       return
     }
 
@@ -39,10 +65,10 @@
     describing = stopper
 
     try {
-      await here.describe(provider, stopper.signal)
+      await target.describe(provider, stopper.signal)
     } catch (failure) {
       if (!stopper.signal.aborted) {
-        workspace.notice = String(failure)
+        workspace.error = String(failure)
       }
     } finally {
       if (describing === stopper) {
@@ -50,10 +76,10 @@
       }
     }
   }
+
   let term = $state("")
   let hit = $state(0)
 
-  // a table matches on its own name or on any column it carries
   let hits = $derived.by(() => {
     const needle = term.trim().toLowerCase()
 
@@ -73,7 +99,7 @@
   })
 
   $effect(() => {
-    term
+    void term
     hit = 0
   })
 
@@ -102,89 +128,179 @@
   }
 </script>
 
+{#snippet swap(first: string, second: string, flipped: boolean)}
+  <span class="grid">
+    <span class={["col-start-1 row-start-1", flipped && "invisible"]}>
+      {first}
+    </span>
+
+    <span class={["col-start-1 row-start-1", !flipped && "invisible"]}>
+      {second}
+    </span>
+  </span>
+{/snippet}
+
 <TabLayout>
   {#snippet aside()}
     <TableList />
   {/snippet}
 
-  <section class="flex min-w-0 flex-1 flex-col rounded-box bg-base-100 lift">
-    <header class="flex items-center gap-2 px-4 pt-2 pb-1">
-      <h2 class="text-sm font-medium">Schema</h2>
+  <Panel glass={false} label={m.tab_schema()} class="min-w-0 flex-1">
+    <div class="@container shrink-0 border-b border-base-content/10">
+      <header class="flex h-12 items-center gap-2 px-4">
+        <h2 class="shrink-0 text-sm font-semibold">{m.tab_schema()}</h2>
 
-      <span class="text-xs text-base-content/45">
-        {m.tables_count({ count: workspace.schema.length })}
-      </span>
+        {#if !workspace.finding}
+          <p
+            class={[
+              "hidden min-w-0 items-center gap-3 text-xs whitespace-nowrap",
+              "text-base-content/70 tabular-nums @2xl:flex",
+            ]}
+          >
+            <span>{m.tables_count({ count: workspace.schema.length })}</span>
+            <span>{m.relations_count({ count: relations })}</span>
 
-      <span class="text-xs text-base-content/45">{m.relations_count({ count: relations })}</span>
+            {#if phase === "loading" && filled}
+              <span class="flex items-center gap-1" in:fade={veil()}>
+                <Icon icon="lucide:loader-circle" class="size-3 animate-spin" />
+                {m.schema_loading()}
+              </span>
+            {/if}
+          </p>
+        {/if}
 
-      <span class="flex-1"></span>
+        <span class="flex-1"></span>
 
-      {#if workspace.finding}
-        <FindBar
-          placeholder={m.find_tables()}
-          bind:term
-          index={hit}
-          total={hits.length}
-          onnext={() => step(1)}
-          onprev={() => step(-1)}
-          onclose={() => (workspace.finding = false)}
-        />
-      {/if}
-
-      <button
-        type="button"
-        aria-pressed={sharing}
-        onclick={() => (sharing = !sharing)}
-        class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
-          {sharing ? 'bg-primary/10 text-primary' : 'bg-base-200 hover:bg-base-300'}"
-      >
-        <Icon icon="lucide:share-2" class="size-4" />
-        {m.share_erd()}
-      </button>
-
-      {#if workspace.ai && workspace.model && workspace.active}
-        <button
-          type="button"
-          onclick={annotate}
-          class="flex items-center gap-2 rounded-field bg-base-200 px-2 py-1
-            text-xs hover:bg-base-300"
-        >
-          <Icon
-            icon={describing ? "lucide:loader-circle" : "lucide:text-quote"}
-            class="size-4 {describing ? 'animate-spin' : ''}"
+        {#if workspace.finding && !diffing}
+          <FindBar
+            placeholder={m.find_tables()}
+            bind:term
+            index={hit}
+            total={hits.length}
+            onnext={() => step(1)}
+            onprev={() => step(-1)}
+            onclose={() => (workspace.finding = false)}
           />
-          {describing ? m.cancel() : m.schema_describe()}
-        </button>
-      {/if}
+        {/if}
 
-      {#if workspace.connections.length > 1}
+        {#if workspace.ai && workspace.model && here}
+          <button
+            type="button"
+            onclick={annotate}
+            aria-busy={describing !== null}
+            aria-label={describing ? m.cancel() : m.schema_describe()}
+            use:tooltip={m.schema_describe()}
+            class="btn btn-ghost btn-sm shrink-0 font-medium"
+          >
+            <Icon
+              icon={describing ? "lucide:loader-circle" : "lucide:text-quote"}
+              class={["size-4", describing && "animate-spin"]}
+            />
+
+            <span class="hidden @3xl:inline">
+              {@render swap(m.schema_describe(), m.cancel(), !!describing)}
+            </span>
+          </button>
+        {/if}
+
         <button
+          bind:this={opener}
           type="button"
-          aria-pressed={diffing}
-          onclick={() => (diffing = !diffing)}
-          class="flex items-center gap-2 rounded-field px-2 py-1 text-xs
-            {diffing
-            ? 'bg-primary/10 text-primary'
-            : 'bg-base-200 hover:bg-base-300'}"
+          aria-haspopup="dialog"
+          aria-expanded={sharing}
+          aria-label={m.share_erd()}
+          use:tooltip={m.share_erd()}
+          onclick={() => (sharing = !sharing)}
+          class={[
+            "btn btn-sm shrink-0 font-medium",
+            sharing ? "btn-soft btn-primary" : "btn-ghost",
+          ]}
         >
-          <Icon icon="lucide:git-compare" class="size-4" />
-          {m.tab_diff()}
+          <Icon icon="lucide:share-2" class="size-4" />
+          <span class="hidden @3xl:inline">{m.share_erd()}</span>
         </button>
-      {/if}
-    </header>
 
-    <div class="min-h-0 flex-1 overflow-hidden rounded-box">
-      {#if diffing}
-        <DiffPanel />
+        {#if comparing}
+          <Segmented
+            small
+            label={m.schema_view()}
+            bind:value={view}
+            options={[
+              {
+                value: "board",
+                label: m.schema_diagram(),
+                icon: "lucide:workflow",
+              },
+              {
+                value: "diff",
+                label: m.tab_diff(),
+                icon: "lucide:git-compare",
+              },
+            ]}
+          />
+        {/if}
+      </header>
+    </div>
+
+    <div class="relative min-h-0 flex-1 overflow-hidden">
+      {#if phase === "failed" && here}
+        <div
+          in:fade={veil()}
+          class="absolute inset-0 grid place-items-center overflow-y-auto"
+        >
+          <EmptyState
+            art="link"
+            title={m.schema_failed()}
+            hint={here.schemaError}
+            class="select-text"
+          >
+            <button
+              type="button"
+              onclick={() => here?.loadSchema(true)}
+              class="btn btn-soft btn-sm font-medium"
+            >
+              <Icon icon="lucide:rotate-cw" class="size-4" />
+              {m.diff_retry()}
+            </button>
+          </EmptyState>
+        </div>
+      {:else if filled}
+        <div in:fade={veil()} class="absolute inset-0">
+          <SvelteFlowProvider>
+            <SchemaBoard keyboard={shown && !diffing && !sharing} />
+          </SvelteFlowProvider>
+        </div>
+      {:else if phase === "ready"}
+        <div in:fade={veil()} class="absolute inset-0 grid place-items-center">
+          <EmptyState
+            art="graph"
+            title={m.schema_empty()}
+            hint={m.schema_empty_hint()}
+          />
+        </div>
       {:else}
-        <SvelteFlowProvider>
-          <SchemaBoard />
-        </SvelteFlowProvider>
+        <div
+          role="status"
+          in:fade={veil()}
+          class="absolute inset-0 grid place-items-center"
+        >
+          <EmptyState art="graph" title={m.schema_loading()} />
+        </div>
+      {/if}
+
+      {#if diffing}
+        <div
+          in:arrive={{ from: "right", distance: 1 }}
+          out:depart={{ to: "right", distance: 1 }}
+          class="absolute inset-0 flex flex-col bg-base-100"
+        >
+          <DiffPanel />
+        </div>
       {/if}
     </div>
-  </section>
+  </Panel>
 </TabLayout>
 
-{#if sharing}
-  <SharePanel onclose={() => (sharing = false)} />
+{#if sharing && opener}
+  <SharePanel anchor={opener} onclose={() => (sharing = false)} />
 {/if}

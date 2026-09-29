@@ -1,10 +1,11 @@
 <script lang="ts">
-  import * as m from "$lib/paraglide/messages"
+  import { openUrl } from "@tauri-apps/plugin-opener"
 
-  import { Icon, ListRow, Logo } from "@gpql/ui"
+  import { field, Icon, ListRow, mark, RowGroup } from "@gpql/ui"
+
+  import * as m from "$lib/paraglide/messages"
   import { latestRelease, run } from "$lib/session/commands"
   import type { ReleaseCheck } from "$lib/types"
-  import { openUrl } from "@tauri-apps/plugin-opener"
 
   const REPO = "https://github.com/pleahmacaka/gpql"
   const SITE = "https://gpql.dev"
@@ -13,6 +14,7 @@
   let checking = $state(false)
   let found = $state<ReleaseCheck | null>(null)
   let failed = $state(false)
+  const signature = mark({ start: performance.now() / 1000 })
 
   async function check() {
     checking = true
@@ -27,67 +29,70 @@
       checking = false
     }
   }
+
+  let status = $derived(
+    checking
+      ? m.update_checking()
+      : failed
+        ? m.update_failed()
+        : found
+          ? found.fresh
+            ? m.update_found({ version: found.latest })
+            : m.update_latest()
+          : m.update_check(),
+  )
 </script>
 
-<div class="flex flex-col items-center pt-4 pb-8 text-center">
-  <Logo class="size-24" />
+<div class="flex items-center gap-6">
+  <canvas
+    aria-hidden="true"
+    class="size-32 shrink-0"
+    {@attach field(signature, { cell: 0.375 })}
+  ></canvas>
 
-  <h2 class="pt-4 font-display text-xl font-medium">GPQL</h2>
+  <div class="flex min-w-0 flex-col gap-2">
+    <h3 class="text-2xl font-extrabold tracking-tight">GPQL</h3>
 
-  <div class="flex items-center gap-2 pt-1">
-    <p class="text-xs text-base-content/45">{m.about_version({ version })}</p>
+    <p class="flex items-center gap-2 text-sm text-base-content/70">
+      {m.about_version({ version })}
 
-    {#if import.meta.env.DEV}
-      <span
-        class="inline-flex items-center gap-1 rounded-selector bg-warning/15
-          px-2 py-1 font-mono text-xs tracking-wide text-warning uppercase"
-      >
-        <Icon icon="lucide:hammer" class="size-3" />
-        dev
-      </span>
-    {/if}
-  </div>
-
-  <div class="flex items-center gap-2 pt-5">
-    <button
-      type="button"
-      onclick={check}
-      disabled={checking}
-      class="flex items-center gap-2 rounded-field bg-base-200 px-3 py-2
-        text-sm transition-colors hover:bg-base-300 disabled:opacity-60"
-    >
-      {#if checking}
-        <Icon icon="lucide:loader-circle" class="size-4 animate-spin" />
-      {:else}
-        <Icon icon="lucide:refresh-cw" class="size-4" />
+      {#if import.meta.env.DEV}
+        <span class="badge badge-sm badge-soft badge-warning gap-1">
+          <Icon icon="lucide:hammer" class="size-3" />
+          Dev
+        </span>
       {/if}
-      {checking
-        ? m.update_checking()
-        : failed
-          ? m.update_failed()
-          : found
-            ? found.fresh
-              ? m.update_found({ version: found.latest })
-              : m.update_latest()
-            : m.update_check()}
-    </button>
+    </p>
 
-    {#if found?.fresh}
+    <div class="flex items-center gap-2 pt-2">
       <button
         type="button"
-        onclick={() => openUrl(found?.link ?? REPO)}
-        class="flex items-center gap-2 rounded-field bg-primary px-3 py-2
-          text-sm text-primary-content transition-colors hover:bg-primary/90"
+        onclick={check}
+        disabled={checking}
+        class="btn btn-soft btn-sm font-medium"
       >
-        <Icon icon="lucide:download" class="size-4" />
-        {m.update_get()}
+        <Icon
+          icon="lucide:refresh-cw"
+          class={["size-4", checking && "animate-spin"]}
+        />
+        {status}
       </button>
-    {/if}
-  </div>
 
+      {#if found?.fresh}
+        <button
+          type="button"
+          onclick={() => openUrl(found?.link ?? REPO)}
+          class="btn btn-primary btn-sm font-medium"
+        >
+          <Icon icon="lucide:download" class="size-4" />
+          {m.update_get()}
+        </button>
+      {/if}
+    </div>
+  </div>
 </div>
 
-<div class="space-y-1">
+<RowGroup>
   <ListRow
     icon="lucide:arrow-up-right"
     title={m.about_site()}
@@ -101,4 +106,4 @@
     detail={REPO}
     onclick={() => openUrl(REPO)}
   />
-</div>
+</RowGroup>

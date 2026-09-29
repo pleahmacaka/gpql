@@ -1,0 +1,37 @@
+.sql-paint {
+  --tok-keyword: oklch(74% 0.14 258);
+  --tok-string: oklch(80% 0.13 78);
+  --tok-number: oklch(78% 0.14 152);
+  --tok-function: oklch(80% 0.1 215);
+}
+
+[data-theme="gpql"] .sql-paint {
+  --tok-keyword: oklch(50% 0.2 258);
+  --tok-string: oklch(52% 0.12 60);
+  --tok-number: oklch(50% 0.13 152);
+  --tok-function: oklch(50% 0.1 215);
+}
+
+.sql-paint .k {
+  color: var(--tok-keyword);
+}
+
+.sql-paint .s {
+  color: var(--tok-string);
+}
+
+.sql-paint .n {
+  color: var(--tok-number);
+}
+
+.sql-paint .f {
+  color: var(--tok-function);
+}
+
+.sql-paint .c {
+  color: color-mix(in oklch, var(--color-base-content) 70%, transparent);
+}
+
+.sql-paint .o {
+  color: color-mix(in oklch, var(--color-base-content) 78%, transparent);
+}

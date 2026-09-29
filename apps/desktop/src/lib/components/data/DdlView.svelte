@@ -1,13 +1,15 @@
 <script lang="ts">
   import { fade } from "svelte/transition"
 
-  import { Icon, veil } from "@gpql/ui"
+  import { EmptyState, Icon, tooltip, veil } from "@gpql/ui"
 
   import * as m from "$lib/paraglide/messages"
-  import { highlightSql, run } from "$lib/session/commands"
-  import { splitTokens } from "$lib/session/tokens"
   import { workspace } from "$lib/session/workspace.svelte"
-  import type { ObjectKind, SqlToken } from "$lib/types"
+  import type { ObjectKind } from "$lib/types"
+
+  import SqlLines from "./SqlLines.svelte"
+
+  const SKELETON = ["w-64", "w-48", "w-72", "w-40", "w-56", "w-32"]
 
   const ICONS: Record<ObjectKind, string> = {
     view: "lucide:eye",
@@ -28,90 +30,69 @@
   }
 
   let shown = $derived(workspace.ddl)
-  let tokens = $state<SqlToken[]>([])
-
-  $effect(() => {
-    const text = shown?.text ?? ""
-    const dialect = workspace.dialect
-
-    if (!text) {
-      tokens = []
-      return
-    }
-
-    let live = true
-
-    run(highlightSql(text, dialect))
-      .then(found => {
-        if (live) {
-          tokens = found
-        }
-      })
-      .catch(() => {
-        if (live) {
-          tokens = []
-        }
-      })
-
-    return () => {
-      live = false
-    }
-  })
-
-  let pieces = $derived(splitTokens(shown?.text ?? "", tokens))
 </script>
 
 {#if shown}
-  <header class="flex items-center gap-2 px-4 pt-2 pb-1">
+  <header
+    class={[
+      "flex h-12 shrink-0 items-center gap-3 border-b border-base-content/10",
+      "pr-2 pl-2",
+    ]}
+  >
+    <button
+      type="button"
+      onclick={() => (workspace.ddl = null)}
+      use:tooltip={m.back()}
+      aria-label={m.back()}
+      class="btn btn-square btn-ghost btn-sm"
+    >
+      <Icon icon="lucide:arrow-left" class="size-4" />
+    </button>
+
     <Icon
       icon={shown.kind ? ICONS[shown.kind] : "lucide:file-code-2"}
-      class="size-4 shrink-0 text-base-content/40"
+      class="size-4 shrink-0 text-base-content/60"
     />
 
-    <h2 class="min-w-0 truncate text-sm font-medium">{shown.name}</h2>
+    <h2 class="min-w-0 truncate text-sm font-semibold">{shown.name}</h2>
 
     {#if shown.kind}
-      <span class="text-xs text-base-content/45">{KINDS[shown.kind]()}</span>
+      <span class="badge badge-sm badge-soft shrink-0">
+        {KINDS[shown.kind]()}
+      </span>
     {/if}
 
     <span class="flex-1"></span>
 
     <button
       type="button"
+      disabled={shown.text === ""}
       onclick={() => navigator.clipboard.writeText(shown.text)}
-      class="rounded-selector bg-base-200 px-2 py-1 text-xs hover:bg-base-300"
+      class="btn btn-soft btn-sm"
     >
+      <Icon icon="lucide:copy" class="size-4" />
       {m.menu_copy()}
-    </button>
-
-    <button
-      type="button"
-      aria-label={m.close()}
-      onclick={() => (workspace.ddl = null)}
-      class="rounded-selector p-1 text-base-content/40 hover:text-base-content"
-    >
-      <Icon icon="lucide:x" class="size-4" />
     </button>
   </header>
 
   <div
-    class="min-h-0 flex-1 overflow-y-auto px-4 pt-1 pb-4"
+    class="min-h-0 flex-1 overflow-auto py-3"
     style:scrollbar-gutter="stable"
   >
-    {#if shown.text === ""}
-      <p
-        in:fade|local={veil()}
-        class="py-6 text-center text-sm text-base-content/45"
-      >
-        <Icon icon="lucide:loader-circle" class="size-4 animate-spin" />
-      </p>
+    {#if workspace.ddlLoading}
+      <div aria-hidden="true" class="flex flex-col gap-3 px-4 pt-1">
+        {#each SKELETON as size, index (index)}
+          <span class={["skeleton h-2 opacity-60", size]}></span>
+        {/each}
+      </div>
+    {:else if shown.text === ""}
+      <div class="grid h-full place-items-center">
+        <EmptyState art="sheet" title={m.ddl_empty()} />
+      </div>
     {:else}
-      <pre
-        in:fade|local={veil()}
-        class="select-text font-mono text-xs leading-6 whitespace-pre-wrap"
-      >{#each pieces as piece, index (index)}<span
-            class="tok-{piece.kind}">{piece.text}</span
-          >{/each}</pre>
+      <div in:fade|local={veil()} class="bg-base-100">
+        <SqlLines text={shown.text} class="bg-base-100" />
+      </div>
     {/if}
   </div>
 {/if}

@@ -1,73 +1,82 @@
 <script lang="ts">
-  import { fade, scale } from "svelte/transition"
-
-  import { Icon, pop, veil } from "@gpql/ui"
+  import { Dialog, type Ending, Icon } from "@gpql/ui"
 
   import * as m from "$lib/paraglide/messages"
   import { workspace } from "$lib/session/workspace.svelte"
 
+  import SqlLines from "./SqlLines.svelte"
+
   let writes = $derived(workspace.writes)
   let pending = $derived(writes.pending)
+  let ending = $state<Ending>("cancel")
+
+  function settle(run: boolean) {
+    ending = run ? "confirm" : "cancel"
+    writes.settle(run)
+  }
 </script>
 
 {#if pending}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    transition:fade={veil()}
-    onclick={() => writes.settle(false)}
-    class="fixed inset-0 z-60 grid place-items-center bg-base-300/45 p-6"
+  <Dialog
+    label={m.preview_title({ count: pending.statements.length })}
+    onclose={() => settle(false)}
+    dismiss={m.cancel()}
+    size="lg"
+    tone="warning"
+    {ending}
   >
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      transition:scale={pop()}
-      onclick={event => event.stopPropagation()}
-      class="flex max-h-full w-full max-w-2xl flex-col rounded-box floating lift"
-    >
-      <header class="flex items-center gap-2 px-4 pt-3 pb-2">
-        <Icon icon="lucide:file-pen-line" class="size-4 text-warning" />
+    <header class="flex items-center gap-3 px-6 pt-6 pb-4">
+      <span class="grid size-8 place-items-center bg-warning/15 text-warning">
+        <Icon icon="lucide:file-pen-line" class="size-4" />
+      </span>
 
-        <h2 class="flex-1 text-sm font-medium">
+      <div class="min-w-0 flex-1">
+        <h2 class="text-base font-semibold tracking-tight">
           {m.preview_title({ count: pending.statements.length })}
         </h2>
 
-        {#if writes.manual}
-          <span class="rounded-field bg-warning/15 px-2 py-1 text-xs text-warning">
-            {m.tx_manual()}
-          </span>
-        {/if}
-      </header>
-
-      <div
-        class="min-h-0 flex-1 overflow-y-auto px-4"
-        style:scrollbar-gutter="stable"
-      >
-        <pre
-          class="rounded-field bg-base-200 p-3 text-xs whitespace-pre-wrap
-            select-text">{pending.statements.join(";\n")};</pre>
+        <p class="text-xs text-base-content/70">{pending.table}</p>
       </div>
 
-      <footer class="flex items-center gap-2 px-4 pt-3 pb-3">
-        <p class="flex-1 text-xs text-base-content/45">
-          {writes.manual ? m.preview_manual_hint() : m.preview_hint()}
-        </p>
+      {#if writes.manual}
+        <span class="badge badge-sm badge-soft badge-warning">
+          {m.tx_manual()}
+        </span>
+      {/if}
+    </header>
 
-        <button
-          type="button"
-          onclick={() => writes.settle(false)}
-          class="rounded-field bg-base-200 px-3 py-2 text-xs hover:bg-base-300"
-        >
-          {m.discard()}
-        </button>
-
-        <button
-          type="button"
-          onclick={() => writes.settle(true)}
-          class="rounded-field bg-primary px-3 py-2 text-xs text-primary-content"
-        >
-          {m.preview_run()}
-        </button>
-      </footer>
+    <div class="min-h-0 flex-1 px-6">
+      <div class="max-h-80 overflow-y-auto bg-base-200 py-3 hairline">
+        <SqlLines
+          wrap
+          text={`${pending.statements.join(";\n")};`}
+          class="bg-base-200"
+        />
+      </div>
     </div>
-  </div>
+
+    <footer class="flex items-center gap-2 px-6 pt-4 pb-6">
+      <p class="flex-1 text-xs text-base-content/70">
+        {writes.manual ? m.preview_manual_hint() : m.preview_hint()}
+      </p>
+
+      <button
+        type="button"
+        onclick={() => settle(false)}
+        class="btn btn-ghost btn-sm font-medium"
+      >
+        {m.cancel()}
+      </button>
+
+      <button
+        type="button"
+        data-autofocus
+        onclick={() => settle(true)}
+        class="btn btn-warning btn-sm font-medium"
+      >
+        <Icon icon="lucide:play" class="size-4" />
+        {m.preview_run()}
+      </button>
+    </footer>
+  </Dialog>
 {/if}

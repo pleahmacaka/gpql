@@ -6,7 +6,7 @@
   let { aside, children }: Props = $props()
 </script>
 
-<div class="flex h-full gap-2 p-2 pt-0">
+<div class="flex h-full gap-2 p-2">
   {#if aside}
     {@render aside()}
   {/if}

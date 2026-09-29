@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { Icon } from "@gpql/ui"
+  import { arrive, Icon, leave } from "@gpql/ui"
 
   type Props = {
     placeholder: string
@@ -31,6 +31,10 @@
   })
 
   function keys(event: KeyboardEvent) {
+    if (event.isComposing) {
+      return
+    }
+
     if (event.key === "Enter") {
       event.preventDefault()
       event.shiftKey ? onprev() : onnext()
@@ -54,21 +58,33 @@
 />
 
 <div
-  class="flex items-center gap-1 rounded-field bg-base-200 px-2 py-1 hairline"
+  role="search"
+  in:arrive|global={{ from: "right", distance: 1 }}
+  out:leave|global
+  class={[
+    "input input-sm w-64 max-w-full min-w-32 shrink gap-1 bg-base-100",
+    "pr-1",
+  ]}
 >
-  <Icon icon="lucide:search" class="size-4 shrink-0 text-base-content/35" />
+  <Icon icon="lucide:search" class="size-4 shrink-0 text-base-content/60" />
 
   <input
     bind:this={box}
     bind:value={term}
     onkeydown={keys}
     {placeholder}
-    class="w-40 bg-transparent text-xs outline-none select-text
-      placeholder:text-base-content/30"
+    aria-label={placeholder}
+    spellcheck="false"
+    class="min-w-0 grow select-text placeholder:text-base-content/60"
   />
 
-  <span class="shrink-0 text-right text-xs whitespace-nowrap
-      text-base-content/40">
+  <span
+    aria-live="polite"
+    class={[
+      "shrink-0 text-right text-xs whitespace-nowrap tabular-nums",
+      total === 0 && term !== "" ? "text-error" : "text-base-content/70",
+    ]}
+  >
     {term === ""
       ? ""
       : total === 0
@@ -78,22 +94,20 @@
 
   <button
     type="button"
-    aria-label="Previous match"
+    aria-label={m.find_previous()}
     onclick={onprev}
     disabled={total === 0}
-    class="rounded-selector p-1 text-base-content/45 hover:text-base-content
-      disabled:text-base-content/20"
+    class="btn btn-square btn-ghost btn-xs"
   >
-    <Icon icon="lucide:chevron-down" class="size-4 rotate-180" />
+    <Icon icon="lucide:chevron-up" class="size-4" />
   </button>
 
   <button
     type="button"
-    aria-label="Next match"
+    aria-label={m.find_next()}
     onclick={onnext}
     disabled={total === 0}
-    class="rounded-selector p-1 text-base-content/45 hover:text-base-content
-      disabled:text-base-content/20"
+    class="btn btn-square btn-ghost btn-xs"
   >
     <Icon icon="lucide:chevron-down" class="size-4" />
   </button>
@@ -102,7 +116,7 @@
     type="button"
     aria-label={m.close()}
     onclick={onclose}
-    class="rounded-selector p-1 text-base-content/40 hover:text-base-content"
+    class="btn btn-square btn-ghost btn-xs"
   >
     <Icon icon="lucide:x" class="size-4" />
   </button>

@@ -1,27 +1,61 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { fade, scale } from "svelte/transition"
+  import { tick } from "svelte"
 
   import { save } from "@tauri-apps/plugin-dialog"
 
-  import { Icon, Lazy, pop, veil, type MenuItem } from "@gpql/ui"
+  import {
+    arrive,
+    ConfirmDialog,
+    depart,
+    Icon,
+    Lazy,
+    type MenuItem,
+    Panel,
+    Segmented,
+    scramble,
+    tooltip,
+  } from "@gpql/ui"
 
   import { workspace } from "$lib/session/workspace.svelte"
 
+  import { chartLabels } from "$lib/components/query/chart"
   import FindBar from "$lib/components/shell/FindBar.svelte"
   import TabLayout from "$lib/components/shell/TabLayout.svelte"
 
   import DdlView from "./DdlView.svelte"
   import MqttView from "./MqttView.svelte"
   import ResultGrid from "./ResultGrid.svelte"
-  import TransactionBar from "./TransactionBar.svelte"
   import TableList from "./TableList.svelte"
+  import TransactionBar from "./TransactionBar.svelte"
 
-  let view = $state<"table" | "chart">("table")
+  type View = "table" | "chart"
+
+  const VIEWS: View[] = ["table", "chart"]
+
+  const TITLE = "max-w-fit min-w-20 flex-1 truncate text-sm font-semibold"
+
+  let view = $state<View>("table")
   let mqtt = $derived(workspace.session?.kind === "mqtt")
   let s3 = $derived(workspace.session?.kind === "s3")
-  let asking = $state(false)
+
+  let views = $derived([
+    {
+      value: "table",
+      label: m.view_table(),
+      icon: mqtt ? "lucide:rss" : "lucide:table-2",
+    },
+    { value: "chart", label: m.view_chart(), icon: "lucide:chart-column" },
+  ])
+
+  let table = $derived(workspace.browse.table)
+
+  let icon = $derived(
+    mqtt ? "lucide:radio" : s3 ? "lucide:package" : "lucide:table-2",
+  )
+
+  let asking = $state<{ retry?: () => void } | null>(null)
   let removing = $state<{ bucket: string; key: string } | null>(null)
   let term = $state("")
   let hit = $state(0)
@@ -50,7 +84,7 @@
   let bump = $state(0)
 
   let spot = $derived.by(() => {
-    bump
+    void bump
 
     if (!workspace.finding) {
       return null
@@ -62,9 +96,35 @@
   })
 
   $effect(() => {
-    term
+    void term
     hit = 0
   })
+
+  let loaded = $derived(workspace.browse.result?.rows.length ?? 0)
+
+  let total = $derived(
+    workspace.tables.find(entry => entry.name === table)?.rows ?? 0,
+  )
+
+  let filtered = $derived(
+    Object.keys(workspace.browse.filters).length > 0 &&
+      workspace.browse.serverSide,
+  )
+
+  // the table total says nothing about a filtered set, so do not pair them
+  let counter = $derived(
+    workspace.browse.error && loaded > 0
+      ? m.rows_partial({ loaded })
+      : filtered
+        ? workspace.nouns.rowsFiltered(loaded)
+        : workspace.browse.end
+          ? workspace.nouns.rowsAll(loaded)
+          : workspace.nouns.rowsLoaded(loaded, total),
+  )
+
+  function pick(next: string) {
+    view = VIEWS.find(entry => entry === next) ?? view
+  }
 
   function step(by: number) {
     if (hits.length > 0) {
@@ -73,19 +133,35 @@
     }
   }
 
+  function ask(retry?: () => void) {
+    asking = { retry }
+  }
+
   function toggleWrites() {
     if (workspace.readOnly) {
-      asking = true
+      ask()
 
       return
     }
 
-    workspace.toggle("readOnly")
+    void workspace.setReadOnly(true)
   }
 
   async function allowWrites() {
-    asking = false
-    await workspace.toggle("readOnly")
+    const retry = asking?.retry
+
+    asking = null
+
+    try {
+      await workspace.setReadOnly(false)
+    } catch (failure) {
+      workspace.error = String(failure)
+
+      return
+    }
+
+    await tick()
+    retry?.()
   }
 
   function objectActions(row: number): MenuItem[] {
@@ -113,7 +189,7 @@
         danger: true,
         run: () => {
           if (workspace.readOnly) {
-            asking = true
+            ask(() => (removing = { bucket, key }))
 
             return
           }
@@ -137,7 +213,7 @@
       await connection.s3Download(bucket, key, path)
       workspace.notice = m.s3_saved({ path })
     } catch (failure) {
-      workspace.notice = String(failure)
+      workspace.error = String(failure)
     }
   }
 
@@ -151,12 +227,13 @@
     try {
       navigator.clipboard.writeText(await connection.s3Presign(bucket, key))
     } catch (failure) {
-      workspace.notice = String(failure)
+      workspace.error = String(failure)
     }
   }
 
   async function removeObject() {
     const target = removing
+
     removing = null
 
     if (!target || !workspace.active) {
@@ -166,229 +243,189 @@
     try {
       await workspace.active.s3Delete(target.bucket, target.key)
     } catch (failure) {
-      workspace.notice = String(failure)
+      workspace.error = String(failure)
     }
   }
 </script>
 
+{#snippet status()}
+  {#if table && workspace.browse.result}
+    <span class="shrink-0 truncate">{counter}</span>
+  {/if}
+
+  <TransactionBar />
+{/snippet}
+
 <TabLayout>
   {#snippet aside()}
-    <TableList onblocked={() => (asking = true)} />
+    <TableList onblocked={() => ask()} />
   {/snippet}
 
-  <section
-    class="relative flex min-w-0 flex-1 flex-col rounded-box bg-base-100 lift"
+  <Panel
+    glass={false}
+    label={table ?? workspace.nouns.panel()}
+    class="min-w-0 flex-1"
+    inner="overflow-hidden"
   >
     {#if workspace.ddl}
       <div
-        transition:fade|local={veil()}
-        class="absolute inset-0 flex flex-col"
+        in:arrive={{ from: "right" }}
+        out:depart={{ to: "right" }}
+        class="absolute inset-0 flex flex-col bg-base-100"
       >
         <DdlView />
       </div>
     {:else}
-    <div
-      transition:fade|local={veil()}
-      class="absolute inset-0 flex flex-col"
-    >
-    <header class="flex h-11 shrink-0 items-center gap-2 px-4">
-      <h2 class="min-w-0 truncate text-sm font-medium">
-        {workspace.browse.table ?? workspace.nouns.none()}
-      </h2>
-
-      <span class="shrink-0 text-xs whitespace-nowrap text-base-content/45">
-        {#if mqtt}
-          {workspace.nouns.row(
-            workspace.tables.find(
-              topic => topic.name === workspace.browse.table,
-            )?.rows ?? 0,
-          )}
-        {:else}
-          {workspace.nouns.columns(workspace.browse.result?.columns.length ?? 0)}
-        {/if}
-      </span>
-
-      <span class="flex-1"></span>
-
-      {#if workspace.finding}
-        <FindBar
-          placeholder={m.find_rows()}
-          bind:term
-          index={hit}
-          total={hits.length}
-          onnext={() => step(1)}
-          onprev={() => step(-1)}
-          onclose={() => (workspace.finding = false)}
-        />
-      {/if}
-
       <div
-        class="flex shrink-0 gap-1 self-center rounded-selector bg-base-200 p-1"
+        in:arrive={{ from: "left" }}
+        out:depart={{ to: "left" }}
+        class="absolute inset-0 flex flex-col bg-base-100"
       >
-        {#each [{ id: "table", icon: mqtt ? "lucide:rss" : "lucide:table-2" }, { id: "chart", icon: "lucide:bar-chart-3" }] as option (option.id)}
+        <header
+          class={[
+            "flex h-12 shrink-0 items-center gap-3 border-b",
+            "border-base-content/10 pr-2 pl-4",
+          ]}
+        >
+          <Icon {icon} class="size-4 shrink-0 text-base-content/60" />
+
+          {#if table}
+            {#key table}
+              <h2 use:scramble={{ duration: 260 }} class={TITLE}>{table}</h2>
+            {/key}
+          {:else}
+            <h2 class={TITLE}>{workspace.nouns.none()}</h2>
+          {/if}
+
+          {#if table && !workspace.finding}
+            <span
+              class={[
+                "min-w-0 shrink truncate text-xs whitespace-nowrap",
+                "text-base-content/70",
+              ]}
+            >
+              {#if mqtt}
+                {workspace.nouns.row(total)}
+              {:else}
+                {workspace.nouns.columns(
+                  workspace.browse.result?.columns.length ?? 0,
+                )}
+              {/if}
+            </span>
+          {/if}
+
+          <span class="flex-1"></span>
+
+          {#if workspace.finding}
+            <FindBar
+              placeholder={m.find_rows()}
+              bind:term
+              index={hit}
+              total={hits.length}
+              onnext={() => step(1)}
+              onprev={() => step(-1)}
+              onclose={() => (workspace.finding = false)}
+            />
+          {/if}
+
+          {#if table && !workspace.finding}
+            <Segmented
+              small
+              label={m.view_label()}
+              options={views}
+              value={view}
+              onpick={pick}
+            />
+          {/if}
+
           <button
             type="button"
-            aria-label={option.id}
-            aria-pressed={view === option.id}
-            onclick={() => (view = option.id as "table" | "chart")}
-            class="rounded-selector px-2 py-1 transition-colors {view ===
-            option.id
-              ? 'bg-base-100 text-base-content hairline'
-              : 'text-base-content/45'}"
+            onclick={toggleWrites}
+            aria-pressed={!workspace.readOnly}
+            use:tooltip={workspace.readOnly
+              ? m.writes_allow()
+              : m.writes_lock()}
+            class={[
+              "btn btn-sm shrink-0 gap-2",
+              workspace.readOnly ? "btn-ghost" : "btn-soft btn-warning",
+            ]}
           >
-            <Icon icon={option.icon} class="size-4" />
+            <Icon
+              icon={workspace.readOnly ? "lucide:lock" : "lucide:pencil"}
+              class="size-4"
+            />
+            {workspace.readOnly ? m.read_only() : m.writes_on()}
           </button>
-        {/each}
+        </header>
+
+        <div class="relative min-h-0 flex-1">
+          {#if mqtt}
+            <div class="absolute inset-0 flex flex-col">
+              <MqttView {view} onblocked={() => ask()} />
+            </div>
+          {:else if view === "chart" && workspace.browse.result}
+            <div
+              in:arrive={{ from: "right" }}
+              out:depart={{ to: "right" }}
+              class="absolute inset-0 flex flex-col pt-3"
+            >
+              <Lazy
+                load={() => import("@gpql/ui/data/ResultChart.svelte")}
+                props={{
+                  columns: workspace.browse.result.columns,
+                  rows: workspace.browse.result.rows,
+                  labels: chartLabels(),
+                }}
+              />
+            </div>
+          {:else}
+            <div
+              in:arrive={{ from: "left" }}
+              out:depart={{ to: "left" }}
+              class="absolute inset-0 flex flex-col"
+            >
+              <ResultGrid
+                result={workspace.browse.result}
+                empty={table
+                  ? workspace.nouns.emptyRows()
+                  : workspace.nouns.pick()}
+                types={workspace.columnTypes}
+                {spot}
+                needle={workspace.finding ? term.trim().toLowerCase() : ""}
+                editable={!s3}
+                onblocked={ask}
+                browse={workspace.browse}
+                actions={s3 ? objectActions : undefined}
+                {status}
+              />
+            </div>
+          {/if}
+        </div>
       </div>
-
-      <button
-        type="button"
-        onclick={toggleWrites}
-        aria-pressed={!workspace.readOnly}
-        title={workspace.readOnly ? m.read_only() : m.writes_on()}
-        class="flex shrink-0 items-center gap-2 self-center rounded-selector
-          px-2 py-1 text-xs transition-colors {workspace.readOnly
-          ? 'bg-base-200 text-base-content/55 hover:bg-base-300'
-          : 'bg-warning/15 text-warning'}"
-      >
-        <Icon
-          icon={workspace.readOnly ? "lucide:lock" : "lucide:pencil"}
-          class="size-4"
-        />
-        {workspace.readOnly ? m.read_only() : m.writes_on()}
-      </button>
-    </header>
-
-    {#if mqtt}
-      <MqttView {view} onblocked={() => (asking = true)} />
-    {:else if view === "chart" && workspace.browse.result}
-      <Lazy
-        load={() => import("@gpql/ui/data/ResultChart.svelte")}
-        props={{
-          columns: workspace.browse.result.columns,
-          rows: workspace.browse.result.rows,
-        }}
-      />
-    {:else}
-      <TransactionBar />
-
-      <ResultGrid
-        result={workspace.browse.result}
-        empty={workspace.browse.table
-          ? workspace.nouns.emptyRows()
-          : workspace.nouns.pick()}
-        types={workspace.columnTypes}
-        {spot}
-        needle={workspace.finding ? term.trim().toLowerCase() : ""}
-        editable={!s3}
-        onblocked={() => (asking = true)}
-        browse={workspace.browse}
-        actions={s3 ? objectActions : undefined}
-      />
     {/if}
-    </div>
-    {/if}
-  </section>
+  </Panel>
 </TabLayout>
 
 {#if asking}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    transition:fade={veil()}
-    onclick={() => (asking = false)}
-    class="fixed inset-0 z-50 scrim"
-  ></div>
-
-  <div
-    transition:scale={pop()}
-    role="dialog"
-    aria-modal="true"
-    class="fixed inset-x-0 top-1/3 z-50 mx-auto w-96 max-w-11/12 rounded-box
-      floating p-5 lift"
-  >
-    <div class="flex items-start gap-3">
-      <Icon icon="lucide:pencil" class="mt-1 size-4 shrink-0 text-warning" />
-
-      <div>
-        <h2 class="text-sm font-medium">{m.writes_ask()}</h2>
-
-        <p class="pt-1 text-xs text-base-content/60">{m.writes_ask_hint()}</p>
-      </div>
-    </div>
-
-    <div class="flex gap-2 pt-5">
-      <button
-        type="button"
-        onclick={() => (asking = false)}
-        class="flex-1 rounded-field bg-base-200 py-2 text-sm
-          hover:bg-base-300"
-      >
-        {m.cancel()}
-      </button>
-
-      <button
-        type="button"
-        onclick={allowWrites}
-        class="flex-1 rounded-field bg-warning py-2 text-sm
-          text-warning-content"
-      >
-        {m.writes_allow()}
-      </button>
-    </div>
-  </div>
+  <ConfirmDialog
+    title={m.writes_ask()}
+    body={m.writes_ask_hint()}
+    confirm={m.writes_allow()}
+    cancel={m.cancel()}
+    icon="lucide:pencil"
+    tone="warning"
+    onconfirm={allowWrites}
+    oncancel={() => (asking = null)}
+  />
 {/if}
 
 {#if removing}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    transition:fade={veil()}
-    onclick={() => (removing = null)}
-    class="fixed inset-0 z-50 scrim"
-  ></div>
-
-  <div
-    transition:scale={pop()}
-    role="dialog"
-    aria-modal="true"
-    class="fixed inset-x-0 top-1/3 z-50 mx-auto w-96 max-w-11/12 rounded-box
-      floating p-5 lift"
-  >
-    <div class="flex items-start gap-3">
-      <Icon
-        icon="lucide:trash-2"
-        class="mt-1 size-4 shrink-0 text-error"
-      />
-
-      <div class="min-w-0">
-        <h2 class="truncate text-sm font-medium">
-          {m.s3_delete_ask({ key: removing.key })}
-        </h2>
-
-        <p class="pt-1 text-xs text-base-content/60">
-          {m.s3_delete_hint({ bucket: removing.bucket })}
-        </p>
-      </div>
-    </div>
-
-    <div class="flex gap-2 pt-5">
-      <button
-        type="button"
-        onclick={() => (removing = null)}
-        class="flex-1 rounded-field bg-base-200 py-2 text-sm
-          hover:bg-base-300"
-      >
-        {m.cancel()}
-      </button>
-
-      <button
-        type="button"
-        onclick={removeObject}
-        class="flex-1 rounded-field bg-error py-2 text-sm text-error-content"
-      >
-        {m.s3_delete()}
-      </button>
-    </div>
-  </div>
+  <ConfirmDialog
+    title={m.s3_delete_ask({ key: removing.key })}
+    body={m.s3_delete_hint({ bucket: removing.bucket })}
+    confirm={m.s3_delete()}
+    cancel={m.cancel()}
+    onconfirm={removeObject}
+    oncancel={() => (removing = null)}
+  />
 {/if}

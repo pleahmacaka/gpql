@@ -3,7 +3,16 @@
 
   import { fade, slide } from "svelte/transition"
 
-  import { Icon, calm, veil } from "@gpql/ui"
+  import {
+    Dropdown,
+    EmptyState,
+    Icon,
+    Keycap,
+    Segmented,
+    TIMING,
+    tooltip,
+    veil,
+  } from "@gpql/ui"
   import * as m from "$lib/paraglide/messages"
   import { workspace } from "$lib/session/workspace.svelte"
 
@@ -15,28 +24,45 @@
   let { view, onblocked }: Props = $props()
 
   type Msg = {
+    id: string
     payload: string
     qos: string
     retained: boolean
     at: number
   }
 
+  const LEVELS = [
+    { value: "0", label: "0" },
+    { value: "1", label: "1" },
+    { value: "2", label: "2" },
+  ]
+
   let conn = $derived(workspace.active)
 
   let msgs = $derived.by(() => {
     const rows = workspace.browse.result?.rows ?? []
+    const seen = new Map<number, number>()
+    const out: Msg[] = []
 
-    return rows.map(
-      (row): Msg => ({
+    for (let index = rows.length - 1; index >= 0; index--) {
+      const row = rows[index]
+      const at = Number(row[3] ?? 0)
+      const twin = seen.get(at) ?? 0
+
+      seen.set(at, twin + 1)
+      out.push({
+        id: `${at}:${twin}`,
         payload: row[0] ?? "",
         qos: row[1] ?? "0",
         retained: row[2] === "true",
-        at: Number(row[3] ?? 0),
-      }),
-    )
+        at,
+      })
+    }
+
+    return out.reverse()
   })
 
-  let openAt = $state<number | null>(null)
+  let openId = $state<string | null>(null)
   let field = $state("")
 
   let followed = $state("")
@@ -111,6 +137,13 @@
 
   let picked = $derived(fields.includes(field) ? field : (fields[0] ?? ""))
 
+  let choices = $derived(
+    fields.map(name => ({
+      value: name,
+      label: name === "" ? m.mqtt_payload() : name,
+    })),
+  )
+
   let points = $derived.by(() => {
     const out: { at: Date; amount: number }[] = []
 
@@ -129,7 +162,7 @@
   let failure = $state("")
 
   async function send() {
-    if (!conn || conn.draft.topic.trim() === "") {
+    if (!conn || conn.draft.topic.trim() === "" || sending) {
       return
     }
 
@@ -158,185 +191,221 @@
   }
 </script>
 
-{#if !workspace.browse.table}
-  <p
-    in:fade|local={veil()}
-    class="py-10 text-center text-sm text-base-content/40"
-  >
-    {workspace.nouns.pick()}
-  </p>
-{:else if view === "chart"}
-  <div in:fade|local={veil()} class="flex min-h-0 flex-1 flex-col">
-    <div class="flex items-center gap-2 px-4 pb-2">
-      <span class="text-xs text-base-content/40">{m.mqtt_field()}</span>
-
-      <select
-        bind:value={field}
-        class="cursor-pointer rounded-field bg-base-200 px-2 py-1 text-xs
-          outline-none"
-      >
-        {#each fields as name (name)}
-          <option value={name}>{name === "" ? "payload" : name}</option>
-        {/each}
-      </select>
+<div class="relative min-h-0 flex-1">
+  {#if !workspace.browse.table}
+    <div
+      in:fade|local={veil()}
+      class="absolute inset-0 grid place-items-center"
+    >
+      <EmptyState art="sheet" title={workspace.nouns.pick()} />
     </div>
+  {:else if view === "chart"}
+    <div
+      in:fade|local={veil()}
+      class="absolute inset-0 flex flex-col gap-3 px-4 pt-3 pb-4"
+    >
+      <div class="flex items-center gap-2 text-xs">
+        <span class="text-base-content/70">{m.mqtt_field()}</span>
 
-    <div class="min-h-0 flex-1 px-4 pb-4">
-      {#if points.length === 0}
-        <p class="py-6 text-sm text-base-content/40">{m.mqtt_numeric_none()}</p>
-      {:else}
-        <LineChart data={points} x="at" y="amount" />
-      {/if}
-    </div>
-  </div>
-{:else if msgs.length === 0}
-  <p
-    in:fade|local={veil()}
-    class="py-10 text-center text-sm text-base-content/40"
-  >
-    {workspace.nouns.emptyRows()}
-  </p>
-{:else}
-  <div
-    in:fade|local={veil()}
-    class="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
-    style:scrollbar-gutter="stable"
-  >
-    {#each msgs as msg, index (index)}
-      {@const open = openAt === index}
-
-      <div
-        class="mx-1 mb-1 rounded-field {open
-          ? 'bg-base-200'
-          : 'hover:bg-base-200/60'}"
-      >
-        <button
-          type="button"
-          onclick={() => (openAt = open ? null : index)}
-          class="flex w-full items-center gap-2 px-2 py-1 text-left"
-        >
-          <span
-            class="shrink-0 text-xs text-base-content/40"
-            style="font-variant-numeric: tabular-nums">{clock(msg.at)}</span
-          >
-
-          <span
-            class="shrink-0 rounded-selector bg-base-300 px-2 text-xs
-              text-base-content/55">qos{msg.qos}</span
-          >
-
-          {#if msg.retained}
-            <Icon
-              icon="lucide:pin"
-              class="size-3 shrink-0 text-base-content/40"
-            />
-          {/if}
-
-          <span class="min-w-0 flex-1 truncate font-mono text-xs select-text">
-            {msg.payload}
-          </span>
-        </button>
-
-        {#if open}
-          <div
-            transition:slide|local={{ duration: calm() ? 0 : 140 }}
-            class="px-2 pb-2"
-          >
-            <pre
-              class="max-h-64 overflow-auto rounded-field bg-base-300 p-2
-                font-mono text-xs select-text">{pretty(msg.payload)}</pre>
-
-            <div class="flex items-center gap-2 pt-1">
-              <span class="text-xs text-base-content/35">
-                {new Date(msg.at).toLocaleString()}
-              </span>
-
-              <span class="flex-1"></span>
-
-              <button
-                type="button"
-                onclick={() => navigator.clipboard.writeText(msg.payload)}
-                class="rounded-selector bg-base-300 px-2 py-1 text-xs
-                  hover:bg-base-100"
-              >
-                {m.menu_copy()}
-              </button>
-            </div>
-          </div>
+        {#if choices.length > 0}
+          <Dropdown
+            small
+            label={m.mqtt_field()}
+            value={picked}
+            options={choices}
+            onpick={next => (field = next)}
+          />
         {/if}
       </div>
-    {/each}
-  </div>
-{/if}
+
+      <div class="relative min-h-0 flex-1">
+        {#if points.length === 0}
+          <div class="absolute inset-0 grid place-items-center">
+            <EmptyState art="graph" title={m.mqtt_numeric_none()} />
+          </div>
+        {:else}
+          <LineChart data={points} x="at" y="amount" />
+        {/if}
+      </div>
+    </div>
+  {:else if msgs.length === 0}
+    <div
+      in:fade|local={veil()}
+      class="absolute inset-0 grid place-items-center"
+    >
+      <EmptyState art="mark" title={workspace.nouns.emptyRows()} />
+    </div>
+  {:else}
+    <ol
+      in:fade|local={veil()}
+      class="absolute inset-0 overflow-y-auto"
+      style:scrollbar-gutter="stable"
+    >
+      {#each msgs as msg (msg.id)}
+        {@const open = openId === msg.id}
+
+        <li
+          class={[
+            "border-b border-base-content/5",
+            open ? "bg-base-content/5" : "hover:bg-base-content/5",
+          ]}
+        >
+          <button
+            type="button"
+            aria-expanded={open}
+            onclick={() => (openId = open ? null : msg.id)}
+            class={[
+              "flex h-9 w-full cursor-pointer items-center gap-3 px-4",
+              "text-left text-sm outline-offset-0",
+            ]}
+          >
+            <Icon
+              icon="lucide:chevron-right"
+              class={[
+                "size-3 shrink-0 text-base-content/60 transition-transform",
+                open && "rotate-90",
+              ]}
+            />
+
+            <span class="shrink-0 text-xs text-base-content/70 tabular-nums">
+              {clock(msg.at)}
+            </span>
+
+            <span class="badge badge-xs badge-soft shrink-0 tabular-nums">
+              {m.mqtt_qos({ level: msg.qos })}
+            </span>
+
+            {#if msg.retained}
+              <span class="badge badge-xs badge-soft badge-info shrink-0">
+                {m.mqtt_retain()}
+              </span>
+            {/if}
+
+            <span class="min-w-0 flex-1 truncate">{msg.payload}</span>
+          </button>
+
+          {#if open}
+            <div
+              transition:slide|local={{ duration: TIMING.quick }}
+              class="flex flex-col gap-2 px-4 pb-3 pl-10"
+            >
+              <pre
+                class={[
+                  "max-h-64 overflow-auto bg-base-200 p-3 text-xs leading-5",
+                  "whitespace-pre-wrap wrap-anywhere select-text hairline",
+                ]}>{pretty(msg.payload)}</pre>
+
+              <div class="flex items-center gap-2">
+                <span class="flex-1 text-xs text-base-content/70 tabular-nums">
+                  {new Date(msg.at).toLocaleString(workspace.locale)}
+                </span>
+
+                <button
+                  type="button"
+                  onclick={() => navigator.clipboard.writeText(msg.payload)}
+                  class="btn btn-soft btn-sm"
+                >
+                  <Icon icon="lucide:copy" class="size-4" />
+                  {m.menu_copy()}
+                </button>
+              </div>
+            </div>
+          {/if}
+        </li>
+      {/each}
+    </ol>
+  {/if}
+</div>
 
 {#if conn}
-  <footer class="shrink-0 border-t border-base-300/60 px-3 pt-2 pb-3">
-    <div class="flex items-center gap-2 pb-1">
-      <input
-        bind:value={conn.draft.topic}
-        placeholder={m.mqtt_topic()}
-        spellcheck="false"
-        class="min-w-0 flex-1 rounded-field bg-base-200 px-2 py-1 font-mono
-          text-xs outline-none select-text placeholder:text-base-content/30"
+  <footer
+    class="flex shrink-0 flex-col gap-2 border-t border-base-content/10 p-3"
+  >
+    <div class="flex items-center gap-2">
+      <label class="input input-sm min-w-0 flex-1 bg-base-100">
+        <Icon icon="lucide:send" class="size-4 shrink-0 text-base-content/60" />
+
+        <input
+          bind:value={conn.draft.topic}
+          placeholder={m.mqtt_topic()}
+          aria-label={m.mqtt_topic()}
+          spellcheck="false"
+          class="min-w-0 grow select-text placeholder:text-base-content/60"
+        />
+      </label>
+
+      <Segmented
+        small
+        label={m.mqtt_qos_label()}
+        options={LEVELS}
+        value={String(conn.draft.qos)}
+        onpick={next => {
+          if (conn) {
+            conn.draft = { ...conn.draft, qos: Number(next) }
+          }
+        }}
       />
 
-      <select
-        bind:value={conn.draft.qos}
-        aria-label="QoS"
-        class="cursor-pointer rounded-field bg-base-200 px-2 py-1 text-xs
-          outline-none"
-      >
-        <option value={0}>qos0</option>
-        <option value={1}>qos1</option>
-        <option value={2}>qos2</option>
-      </select>
-
       <label
-        class="flex cursor-pointer items-center gap-1 text-xs
-          text-base-content/55"
+        class={[
+          "flex shrink-0 cursor-pointer items-center gap-2 text-xs",
+          "text-base-content/70",
+        ]}
       >
         <input
           type="checkbox"
           bind:checked={conn.draft.retain}
-          class="size-3 accent-primary"
+          class="toggle toggle-sm toggle-primary"
         />
-        retain
+        {m.mqtt_retain()}
       </label>
-
-      <button
-        type="button"
-        onclick={send}
-        disabled={sending || conn.draft.topic.trim() === ""}
-        class="flex items-center gap-1 rounded-field bg-primary px-3 py-1
-          text-xs text-primary-content disabled:opacity-40"
-      >
-        <Icon icon="lucide:send" class="size-3" />
-        {m.mqtt_publish()}
-      </button>
     </div>
 
     <textarea
       bind:value={conn.draft.payload}
       placeholder={m.mqtt_payload()}
+      aria-label={m.mqtt_payload()}
       spellcheck="false"
       rows="2"
       onkeydown={event => {
-        if (event.key === "Enter" && event.ctrlKey) {
+        if (event.key === "Enter" && event.ctrlKey && !event.isComposing) {
           event.preventDefault()
           void send()
         }
       }}
-      class="w-full resize-none rounded-field bg-base-200 px-2 py-1 font-mono
-        text-xs outline-none select-text placeholder:text-base-content/30"
+      class={[
+        "textarea w-full resize-none bg-base-100 text-sm select-text",
+        "placeholder:text-base-content/60",
+      ]}
     ></textarea>
 
-    {#if failure !== ""}
-      <p
-        transition:slide|local={{ duration: calm() ? 0 : 140 }}
-        class="pt-1 text-xs text-error"
+    <div class="flex h-8 items-center gap-3">
+      {#if failure !== ""}
+        <p
+          in:fade|local={veil()}
+          role="alert"
+          use:tooltip={failure}
+          class="flex min-w-0 flex-1 items-center gap-2 text-xs text-error"
+        >
+          <Icon icon="lucide:circle-alert" class="size-4 shrink-0" />
+          <span class="truncate select-text">{failure}</span>
+        </p>
+      {:else}
+        <Keycap keys={["ctrl", "enter"]} class="flex-1" />
+      {/if}
+
+      <button
+        type="button"
+        onclick={send}
+        disabled={sending || conn.draft.topic.trim() === ""}
+        class="btn btn-primary btn-sm font-medium"
       >
-        {failure}
-      </p>
-    {/if}
+        <Icon
+          icon={sending ? "lucide:loader-circle" : "lucide:send"}
+          class={["size-4", sending && "animate-spin"]}
+        />
+        {m.mqtt_publish()}
+      </button>
+    </div>
   </footer>
 {/if}

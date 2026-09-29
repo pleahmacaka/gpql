@@ -1,7 +1,7 @@
 <script lang="ts">
   import { slide } from "svelte/transition"
 
-  import { Icon, calm, menu } from "@gpql/ui"
+  import { contextmenu, Icon, type MenuItem, TIMING } from "@gpql/ui"
 
   import * as m from "$lib/paraglide/messages"
   import { workspace } from "$lib/session/workspace.svelte"
@@ -63,6 +63,7 @@
   async function show(entry: DbObject) {
     if (!READABLE.includes(entry.kind)) {
       await workspace.showDdl(entry.name, entry.kind, entry.detail)
+
       return
     }
 
@@ -70,8 +71,8 @@
     await workspace.select(entry.name)
   }
 
-  function openMenu(event: MouseEvent, entry: DbObject) {
-    menu.show(event, [
+  function itemsFor(entry: DbObject): MenuItem[] {
+    return [
       ...(entry.kind === "view"
         ? [
             {
@@ -94,7 +95,7 @@
         icon: "lucide:copy",
         run: () => navigator.clipboard.writeText(entry.name),
       },
-    ])
+    ]
   }
 </script>
 
@@ -105,60 +106,85 @@
     type="button"
     aria-expanded={!shut}
     onclick={() => (open = { ...open, [kind]: shut })}
-    class="flex w-full items-center gap-2 px-3 pt-2 pb-1 text-xs
-      text-base-content/40 hover:text-base-content/70"
+    class={[
+      "flex w-full cursor-pointer items-center gap-2 px-4 pt-3 pb-1 text-xs",
+      "font-medium text-base-content/70 transition-colors",
+      "hover:text-base-content",
+    ]}
   >
     <Icon
-      icon={shut ? "lucide:chevron-right" : "lucide:chevron-down"}
-      class="size-3 shrink-0"
+      icon="lucide:chevron-right"
+      class={["size-3 shrink-0 transition-transform", !shut && "rotate-90"]}
     />
     <span class="flex-1 text-left">{HEADINGS[kind]()}</span>
-    <span>{entries.length}</span>
+    <span class="tabular-nums">{entries.length}</span>
   </button>
 
   {#if !shut}
-    <div transition:slide|local={{ duration: calm() ? 0 : 150 }}>
-    {#each entries as entry (entry.kind + entry.name)}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div oncontextmenu={event => openMenu(event, entry)}>
-        <button
-          type="button"
-          onclick={() => show(entry)}
-          ondblclick={() =>
-            entry.kind === "view"
-              ? workspace.showDdl(entry.name, entry.kind, entry.detail)
-              : undefined}
-          aria-pressed={workspace.browse.table === entry.name ||
-            workspace.ddl?.name === entry.name}
-          class="flex w-full items-center gap-2 rounded-field px-3 py-1
-            text-left hover:bg-base-200 {workspace.browse.table ===
-            entry.name || workspace.ddl?.name === entry.name
-            ? 'bg-primary/10 text-primary'
-            : ''}"
+    <ul transition:slide|local={{ duration: TIMING.quick }}>
+      {#each entries as entry, index (index)}
+        {@const picked =
+          workspace.browse.table === entry.name ||
+          workspace.ddl?.name === entry.name}
+
+        <li
+          use:contextmenu={() => itemsFor(entry)}
+          class={[
+            "relative transition-colors",
+            picked ? "bg-primary/10 text-primary" : "hover:bg-base-content/5",
+          ]}
         >
-          <Icon
-            icon={ICONS[entry.kind]}
-            class="size-4 shrink-0 opacity-60"
-          />
-
-          <span class="min-w-0 flex-1 truncate text-sm" title={entry.name}>
-            {entry.name}
-          </span>
-
-          {#if entry.detail}
-            <span class="shrink-0 truncate text-xs text-base-content/35">
-              {entry.detail}
-            </span>
+          {#if picked}
+            <span
+              aria-hidden="true"
+              class="absolute inset-y-0 left-0 w-1 bg-primary"
+            ></span>
           {/if}
-        </button>
-      </div>
-    {/each}
-    </div>
+
+          <button
+            type="button"
+            onclick={() => show(entry)}
+            ondblclick={() =>
+              entry.kind === "view"
+                ? workspace.showDdl(entry.name, entry.kind, entry.detail)
+                : undefined}
+            aria-current={picked ? "true" : undefined}
+            class={[
+              "flex w-full cursor-pointer items-center gap-2 py-2 pr-3 pl-4",
+              "text-left outline-offset-0",
+            ]}
+          >
+            <Icon
+              icon={ICONS[entry.kind]}
+              class={[
+                "size-4 shrink-0",
+                picked ? "text-primary" : "text-base-content/60",
+              ]}
+            />
+
+            <span class="min-w-0 flex-1 truncate text-sm" title={entry.name}>
+              {entry.name}
+            </span>
+
+            {#if entry.detail}
+              <span
+                class={[
+                  "max-w-24 shrink-0 truncate text-xs",
+                  picked ? "text-primary" : "text-base-content/70",
+                ]}
+              >
+                {entry.detail}
+              </span>
+            {/if}
+          </button>
+        </li>
+      {/each}
+    </ul>
   {/if}
 {/each}
 
 {#if grouped.length === 0}
-  <p class="px-3 py-4 text-center text-xs text-base-content/35">
+  <p class="px-4 py-6 text-center text-xs text-base-content/70">
     {m.objects_none()}
   </p>
 {/if}

@@ -7,11 +7,13 @@
 
   import * as api from "$lib/session/commands"
   import { blankConfig, check } from "$lib/session/commands"
-  import { open } from "@tauri-apps/plugin-dialog"
+  import { open, save } from "@tauri-apps/plugin-dialog"
 
-  import { friendly } from "$lib/session/errors"
+  import { friendly, hint } from "$lib/session/errors"
   import { workspace } from "$lib/session/workspace.svelte"
   import type { Probe, SessionConfig } from "$lib/types"
+
+  import { DATABASE_FILTERS, FILES } from "./launcher.svelte"
 
   type Props = { seed?: SessionConfig | null; onsaved?: () => void }
 
@@ -26,8 +28,10 @@
   })
 
   let running: Fiber.RuntimeFiber<void, never> | null = null
+  let listing = 0
 
   let catalogue = $state<string[]>([])
+  let listingNow = $state(false)
   let keyFiles = $state<string[]>([])
   let localPortTaken = $state(false)
   let alias = $state(
@@ -37,6 +41,36 @@
           ?.alias ?? "",
     ),
   )
+
+  const LABELS: Record<string, () => string> = {
+    Host: m.field_host,
+    Port: m.field_port,
+    User: m.field_user,
+    Password: m.field_password,
+    Database: m.field_database,
+    File: m.field_file,
+    Endpoint: m.field_endpoint,
+    Region: m.field_region,
+    Bucket: m.field_bucket,
+    "Topic filter": m.field_topic_filter,
+    Organization: m.field_organization,
+    "Access key": m.field_access_key,
+    "Secret key": m.field_secret_key,
+    Token: m.field_token,
+    "API token": m.field_api_token,
+  }
+
+  let backends = $derived(
+    workspace.catalog.map(entry => ({
+      ...entry,
+      fields: entry.fields.map(field => ({
+        ...field,
+        label: LABELS[field.label]?.() ?? field.label,
+      })),
+    })),
+  )
+
+  let probeHint = $derived(probe.tone === "bad" ? hint(probe.text) : "")
 
   let backend = $derived(
     workspace.catalog.find(entry => entry.id === config.kind),
@@ -57,6 +91,8 @@
       field => field.key === "host" || field.key === "url",
     ),
   )
+
+  let fresh = $derived(FILES[config.kind])
 
   let wantsDatabase = $derived(
     (backend?.fields ?? []).some(field => field.key === "database"),
@@ -97,30 +133,34 @@
       config.user,
       config.password,
       config.token,
+      config.url,
+      JSON.stringify(config.tunnel),
     ]
+
+    listing++
 
     if (!canList) {
       catalogue = []
+      listingNow = false
 
       return
     }
 
-    const snapshot = { ...config }
+    const snapshot = $state.snapshot(config)
     const timer = setTimeout(() => void loadDatabases(snapshot), 600)
 
     return () => clearTimeout(timer)
   })
 
   $effect(() => {
-    void [
-      config.kind,
-      config.host,
-      config.port,
-      config.user,
-      config.password,
-      config.database,
-      config.path,
-    ]
+    const snapshot = $state.snapshot(config)
+
+    if (config.create === true && fresh) {
+      stop()
+      probe = { tone: "idle", text: "" }
+
+      return
+    }
 
     if (!ready) {
       stop()
@@ -129,7 +169,7 @@
       return
     }
 
-    verify()
+    verify(snapshot)
 
     return stop
   })
@@ -141,10 +181,8 @@
     }
   }
 
-  function verify() {
+  function verify(snapshot = $state.snapshot(config)) {
     stop()
-
-    const snapshot = { ...config }
 
     running = Effect.runFork(
       Effect.gen(function* () {
@@ -166,11 +204,25 @@
   }
 
   async function loadDatabases(snapshot: SessionConfig) {
+    const ticket = listing
+
+    listingNow = true
+
     try {
-      catalogue = await api.run(api.databases(snapshot))
+      const found = await api.run(api.databases(snapshot))
+
+      if (ticket === listing) {
+        catalogue = found
+      }
     } catch (failure) {
-      catalogue = []
-      probe = { tone: "bad", text: friendly(String(failure)) }
+      if (ticket === listing) {
+        catalogue = []
+        probe = { tone: "bad", text: friendly(String(failure)) }
+      }
+    } finally {
+      if (ticket === listing) {
+        listingNow = false
+      }
     }
   }
 
@@ -178,17 +230,30 @@
     const picked = await open({
       multiple: false,
       directory: false,
-      filters: [
-        {
-          name: "Database",
-          extensions: ["db", "sqlite", "sqlite3", "duckdb", "ddb"],
-        },
-      ],
+      filters: DATABASE_FILTERS,
     })
 
     if (typeof picked === "string") {
+      config.create = false
       config.path = picked
-      verify()
+    }
+  }
+
+  async function createFile() {
+    const kind = fresh
+
+    if (!kind) {
+      return
+    }
+
+    const picked = await save({
+      defaultPath: kind.name,
+      filters: [{ name: "Database", extensions: kind.extensions }],
+    })
+
+    if (picked) {
+      config.create = true
+      config.path = picked
     }
   }
 
@@ -196,7 +261,15 @@
     const picked = await open({ multiple: false, directory: false })
 
     if (typeof picked === "string" && config.tunnel) {
-      config.tunnel.keyPath = picked
+      config.tunnel = { ...config.tunnel, keyPath: picked }
+    }
+  }
+
+  const editing = untrack(() => workspace.editing !== null)
+
+  async function name(url: string) {
+    if (editing || alias.trim() !== "") {
+      await workspace.renameRecent(url, alias)
     }
   }
 
@@ -204,7 +277,7 @@
     try {
       const url = await workspace.keepConnection(config)
 
-      await workspace.renameRecent(url, alias)
+      await name(url)
       onsaved?.()
     } catch (failure) {
       probe = { tone: "bad", text: friendly(String(failure)) }
@@ -214,7 +287,7 @@
   async function start() {
     try {
       await workspace.open(config)
-      await workspace.renameRecent(api.describe(config), alias)
+      await name(api.describe(config))
     } catch (failure) {
       probe = { tone: "bad", text: friendly(String(failure)) }
     }
@@ -223,18 +296,22 @@
 
 <SessionCard
   bind:draft={config}
-  backends={workspace.catalog}
+  {backends}
   presets={workspace.presets}
   {probe}
+  {probeHint}
   readOnly={workspace.readOnly}
   busy={workspace.busy}
+  pinned
   onconnect={start}
   onkeep={keep}
-  ontoggleReadOnly={() => workspace.toggle("readOnly")}
+  ontoggleReadOnly={() => workspace.setReadOnly(!workspace.readOnly)}
   onbrowse={pickFile}
+  oncreate={fresh ? createFile : undefined}
   onbrowseKey={pickKey}
   tunnelled={overHost}
   databases={catalogue}
+  listing={listingNow}
   {keyFiles}
   {localPortTaken}
   {alias}
@@ -248,6 +325,13 @@
     connect: m.connect(),
     save: m.save_connection(),
     browse: m.browse(),
+    newFile: m.new_file(),
+    newFileHint: m.new_file_hint(),
+    writesHint: m.writes_ask_hint(),
+    found: m.found_databases(),
+    listing: m.databases_loading(),
+    presets: m.settings_credentials(),
+    keys: m.ssh_keys(),
     tlsAuto: m.tls_auto(),
     tlsVerify: m.tls_verify(),
     tlsRequire: m.tls_require(),
@@ -265,5 +349,6 @@
     viaHop: m.via_hop(),
     tunnelPassword: m.tunnel_password(),
     tunnelPassphrase: m.tunnel_passphrase(),
+    port: m.field_port(),
   }}
 />

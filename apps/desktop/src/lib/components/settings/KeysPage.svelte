@@ -1,13 +1,19 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages"
 
-  import { Keycap } from "@gpql/ui"
+  import { Keycap, RowGroup } from "@gpql/ui"
 
   const groups = [
     {
       title: m.hint_app(),
       keys: [
         { label: m.key_palette(), keys: ["ctrl", "k"] },
+        { label: m.action_new(), keys: ["ctrl", "n"] },
+        { label: m.action_quick(), keys: ["ctrl", "l"] },
+        { label: m.recent_connections(), keys: ["ctrl", "h"] },
+        { label: m.erd_new(), keys: ["ctrl", "shift", "d"] },
+        { label: m.erd_open(), keys: ["ctrl", "o"] },
+        { label: m.action_open_file(), keys: ["ctrl", "shift", "o"] },
         { label: m.key_find(), keys: ["ctrl", "f"] },
         { label: m.key_tabs(), keys: ["1", "2", "3"] },
         { label: m.key_settings(), keys: ["ctrl", ","] },
@@ -30,6 +36,7 @@
         { label: m.key_run(), keys: ["ctrl", "enter"] },
         { label: m.key_clear(), keys: ["ctrl", "u"] },
         { label: m.key_complete(), keys: ["ctrl", "space"] },
+        { label: m.format_sql(), keys: ["shift", "alt", "f"] },
       ],
     },
     {
@@ -39,23 +46,13 @@
   ]
 </script>
 
-<div class="space-y-5">
-  {#each groups as group (group.title)}
-    <section>
-      <h3 class="px-1 pb-2 text-xs text-base-content/45">{group.title}</h3>
-
-      <div class="space-y-1">
-        {#each group.keys as row (row.label)}
-          <div
-            class="flex items-center gap-3 rounded-field px-3 py-2
-              hover:bg-base-200"
-          >
-            <span class="min-w-0 flex-1 truncate text-sm">{row.label}</span>
-
-            <Keycap keys={row.keys} />
-          </div>
-        {/each}
+{#each groups as group (group.title)}
+  <RowGroup label={group.title}>
+    {#each group.keys as row (row.label)}
+      <div class="flex items-center gap-4 px-4 py-2">
+        <span class="min-w-0 flex-1 truncate text-sm">{row.label}</span>
+        <Keycap keys={row.keys} />
       </div>
-    </section>
-  {/each}
-</div>
+    {/each}
+  </RowGroup>
+{/each}

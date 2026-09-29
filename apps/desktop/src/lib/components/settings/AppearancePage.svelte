@@ -1,57 +1,63 @@
 <script lang="ts">
+  import { Dropdown, OptionRow, RowGroup, SettingRow } from "@gpql/ui"
+
   import * as m from "$lib/paraglide/messages"
-  import { locales, type Locale } from "$lib/paraglide/runtime"
+  import { locales } from "$lib/paraglide/runtime"
+  import {
+    type Scheme,
+    schemes,
+    workspace,
+  } from "$lib/session/workspace.svelte"
 
-  import { Dropdown, OptionRow, SettingRow } from "@gpql/ui"
-  import { type Scheme, schemes, workspace } from "$lib/session/workspace.svelte"
-
-  const label = (scheme: Scheme) =>
-    scheme === "system"
-      ? m.theme_system()
-      : scheme === "light"
-        ? m.theme_light()
-        : m.theme_dark()
-
-  const names: Record<string, string> = {
+  const NAMES: Record<string, string> = {
     en: "English",
     ko: "한국어",
     ja: "日本語",
     zh: "中文",
   }
 
+  const SCHEMES: Record<Scheme, () => string> = {
+    system: m.theme_system,
+    light: m.theme_light,
+    dark: m.theme_dark,
+  }
+
   let languages = $derived(
-    locales.map(locale => ({
-      value: locale,
-      label: names[locale] ?? locale,
-    })),
+    locales.map(locale => ({ value: locale, label: NAMES[locale] ?? locale })),
   )
 
   let themes = $derived(
-    schemes.map(scheme => ({ value: scheme, label: label(scheme) })),
+    schemes.map(scheme => ({ value: scheme, label: SCHEMES[scheme]() })),
   )
 </script>
 
-<div class="mb-2 flex items-center gap-3 rounded-field bg-base-200 px-3 py-2">
-  <span class="flex-1 text-sm">{m.language()}</span>
+<RowGroup label={m.settings_display()}>
+  <SettingRow
+    icon="lucide:languages"
+    title={m.language()}
+    detail={m.language_hint()}
+  >
+    <Dropdown
+      label={m.language()}
+      options={languages}
+      value={workspace.locale}
+      onpick={next => workspace.speak(next)}
+    />
+  </SettingRow>
 
-  <Dropdown
-    options={languages}
-    value={workspace.locale}
-    onpick={next => workspace.speak(next as Locale)}
-  />
-</div>
+  <SettingRow
+    icon="lucide:sun-moon"
+    title={m.option_theme()}
+    detail={m.option_theme_hint()}
+  >
+    <Dropdown
+      label={m.option_theme()}
+      options={themes}
+      value={workspace.scheme}
+      onpick={next => workspace.setScheme(next)}
+    />
+  </SettingRow>
 
-<div class="mb-2 flex items-center gap-3 rounded-field bg-base-200 px-3 py-2">
-  <span class="flex-1 text-sm">{m.option_theme()}</span>
-
-  <Dropdown
-    options={themes}
-    value={workspace.scheme}
-    onpick={next => workspace.setScheme(next as Scheme)}
-  />
-</div>
-
-<div class="space-y-2">
   <OptionRow
     icon="lucide:rows-3"
     title={m.option_compact()}
@@ -68,12 +74,21 @@
     onclick={() => workspace.toggle("minimap")}
   />
 
+  <OptionRow
+    icon="lucide:wand-sparkles"
+    title={m.option_motion()}
+    detail={m.option_motion_hint()}
+    on={workspace.motion}
+    onclick={() => workspace.toggle("motion")}
+  />
+
   <SettingRow
     icon="lucide:message-circle"
     title={m.option_orb()}
     detail={m.option_orb_hint()}
   >
     <Dropdown
+      label={m.option_orb()}
       options={[
         { value: "left", label: m.orb_left() },
         { value: "center", label: m.orb_center() },
@@ -83,71 +98,9 @@
       onpick={side => workspace.setOrbSide(side)}
     />
   </SettingRow>
+</RowGroup>
 
-  <SettingRow
-    icon="lucide:door-open"
-    title={m.option_startup()}
-    detail={m.option_startup_hint()}
-  >
-    <Dropdown
-      options={[
-        { value: "last", label: m.startup_last() },
-        { value: "recent", label: m.startup_recent() },
-      ]}
-      value={workspace.startup}
-      onpick={mode => workspace.setStartup(mode)}
-    />
-  </SettingRow>
-
-  <SettingRow
-    icon="lucide:timer"
-    title={m.write_window()}
-    detail={m.write_window_hint()}
-  >
-    <Dropdown
-      options={workspace.windows.map(minutes => ({
-        value: String(minutes),
-        label: minutes === 0 ? m.write_window_never() : m.minutes({ count: minutes }),
-      }))}
-      value={String(workspace.writeWindow)}
-      onpick={minutes => workspace.setWriteWindow(Number(minutes))}
-    />
-  </SettingRow>
-
-  <OptionRow
-    icon="lucide:file-pen-line"
-    title={m.option_preview()}
-    detail={m.option_preview_hint()}
-    on={workspace.writes.preview}
-    onclick={() => workspace.writes.setPreview(!workspace.writes.preview)}
-  />
-
-  <OptionRow
-    icon="lucide:git-commit-horizontal"
-    title={m.option_manual()}
-    detail={workspace.writes.available
-      ? m.option_manual_hint()
-      : m.tx_unsupported()}
-    on={workspace.writes.manual}
-    onclick={() => workspace.writes.setManual(!workspace.writes.manual)}
-  />
-
-  <OptionRow
-    icon="lucide:lock"
-    title={m.read_only()}
-    detail={m.option_read_only_hint()}
-    on={workspace.readOnly}
-    onclick={() => workspace.toggle("readOnly")}
-  />
-
-  <OptionRow
-    icon="lucide:wand-sparkles"
-    title={m.option_motion()}
-    detail={m.option_motion_hint()}
-    on={workspace.motion}
-    onclick={() => workspace.toggle("motion")}
-  />
-
+<RowGroup label={m.settings_window()}>
   <OptionRow
     icon="lucide:layers"
     title={m.option_acrylic()}
@@ -156,23 +109,25 @@
     onclick={() => workspace.toggle("acrylic")}
   />
 
-  {#if workspace.acrylic}
-    <label class="flex items-center gap-3 rounded-field bg-base-200 px-3 py-2">
-      <span class="text-xs text-base-content/45">{m.option_texture()}</span>
-
-      <input
-        type="range"
-        min="0"
-        max="100"
-        value={workspace.texture}
-        oninput={event =>
-          workspace.setTexture(Number(event.currentTarget.value))}
-        class="range range-primary range-xs flex-1"
-      />
-
-      <span class="w-8 text-right text-xs text-base-content/45">
-        {workspace.texture}
+  <label class="flex items-center gap-4 px-4 py-3">
+    <span class="min-w-0 flex-1">
+      <span class="block text-sm">{m.option_texture()}</span>
+      <span class="block text-xs text-base-content/70">
+        {m.option_texture_hint()}
       </span>
-    </label>
-  {/if}
-</div>
+    </span>
+
+    <input
+      type="range"
+      min="0"
+      max="100"
+      value={workspace.texture}
+      oninput={event => workspace.setTexture(Number(event.currentTarget.value))}
+      class="range range-primary range-xs w-40"
+    />
+
+    <span class="w-8 text-right text-xs text-base-content/70 tabular-nums">
+      {workspace.texture}
+    </span>
+  </label>
+</RowGroup>
